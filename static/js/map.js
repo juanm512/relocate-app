@@ -305,6 +305,10 @@ function initEventListeners() {
         toggleServicesLayer('colectivos', e.target.checked);
     });
     
+    document.getElementById('show-colectivos-recorridos').addEventListener('change', (e) => {
+        toggleServicesLayer('colectivosRecorridos', e.target.checked);
+    });
+    
     // Checkbox de mostrar solo envolvente
     document.getElementById('show-hull-only').addEventListener('change', (e) => {
         if (state.hasResults) {
@@ -1222,7 +1226,8 @@ async function loadServicesLayers() {
         hospitales: L.layerGroup(),
         comisarias: L.layerGroup(),
         barrios: L.layerGroup(),
-        colectivos: L.layerGroup()
+        colectivos: L.layerGroup(),
+        colectivosRecorridos: L.layerGroup()
     };
     
     // Cargar hospitales
@@ -1322,6 +1327,45 @@ async function loadServicesLayers() {
         console.log(`[SERVICES] Cargadas ${data.count} paradas de colectivo`);
     } catch (e) {
         console.error('Error cargando colectivos:', e);
+    }
+    
+    // Cargar recorridos de colectivos
+    try {
+        const response = await fetch('/api/colectivos-recorridos');
+        const data = await response.json();
+        
+        // Colores para diferentes líneas
+        const colors = ['#16a34a', '#0891b2', '#7c3aed', '#db2777', '#ea580c', '#2563eb'];
+        
+        data.recorridos.forEach((rec, idx) => {
+            const color = colors[idx % colors.length];
+            
+            const polyline = L.polyline(rec.polyline, {
+                color: color,
+                weight: 3,
+                opacity: 0.7
+            }).bindPopup(
+                `<strong>🚌 Línea ${rec.linea}</strong><br>` +
+                `<small>${rec.descripcion}</small>`
+            );
+            
+            // Tooltip en hover
+            polyline.bindTooltip(
+                `Línea ${rec.linea}`,
+                {
+                    sticky: true,
+                    direction: 'top',
+                    className: 'route-tooltip',
+                    opacity: 1
+                }
+            );
+            
+            state.servicesLayers.colectivosRecorridos.addLayer(polyline);
+        });
+        
+        console.log(`[SERVICES] Cargados ${data.count} recorridos de colectivo`);
+    } catch (e) {
+        console.error('Error cargando recorridos de colectivos:', e);
     }
 }
 

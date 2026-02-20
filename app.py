@@ -1243,6 +1243,145 @@ def load_colectivos_caba():
     return paradas
 
 
+def load_colectivos_recorridos():
+    """Carga recorridos de colectivos que pasan por CABA"""
+    import csv
+    import os
+    
+    base_path = os.path.join(os.path.dirname(__file__), 'data', 'colectivos-gtfs')
+    
+    # Límites de CABA
+    min_lat, max_lat = -34.75, -34.52
+    min_lon, max_lon = -58.53, -58.33
+    
+    def is_in_caba(lat, lon):
+        return min_lat <= lat <= max_lat and min_lon <= lon <= max_lon
+    
+    # 1. Cargar shapes y filtrar las que pasan por CABA
+    print('[DATA] Cargando shapes...', flush=True)
+    shapes = {}  # shape_id -> {points: [{lat, lon, sequence}], pasa_caba: bool}
+    
+    shapes_path = os.path.join(base_path, 'shapes.txt')
+    if os.path.exists(shapes_path):
+        try:
+            with open(shapes_path, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    try:
+                        shape_id = row['shape_id']
+                        lat = float(row['shape_pt_lat'])
+                        lon = float(row['shape_pt_lon'])
+                        sequence = int(row['shape_pt_sequence'])
+                        
+                        if shape_id not in shapes:
+                            shapes[shape_id] = {'points': [], 'pasa_caba': False}
+                        
+                        shapes[shape_id]['points'].append({
+                            'lat': lat,
+                            'lon': lon,
+                            'sequence': sequence
+                        })
+                        
+                        if is_in_caba(lat, lon):
+                            shapes[shape_id]['pasa_caba'] = True
+                    except:
+                        continue
+        except Exception as e:
+            print(f'[DATA] Error cargando shapes: {e}', flush=True)
+    
+    # Filtrar solo shapes que pasan por CABA
+    shapes_caba = {k: v for k, v in shapes.items() if v['pasa_caba']}
+    print(f'[DATA] Shapes que pasan por CABA: {len(shapes_caba)}', flush=True)
+    
+    # 2. Cargar trips para relacionar route_id con shape_id
+    print('[DATA] Cargando trips...', flush=True)
+    route_to_shapes = {}  # route_id -> set de shape_ids
+    
+    trips_path = os.path.join(base_path, 'trips.txt')
+    if os.path.exists(trips_path):
+        try:
+            with open(trips_path, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    try:
+                        route_id = row['route_id']
+                        shape_id = row['shape_id']
+                        
+                        if shape_id in shapes_caba:
+                            if route_id not in route_to_shapes:
+                                route_to_shapes[route_id] = set()
+                            route_to_shapes[route_id].add(shape_id)
+                    except:
+                        continue
+        except Exception as e:
+            print(f'[DATA] Error cargando trips: {e}', flush=True)
+    
+    print(f'[DATA] Routes con shapes en CABA: {len(route_to_shapes)}', flush=True)
+    
+    # 3. Cargar routes para obtener nombres de líneas
+    print('[DATA] Cargando routes...', flush=True)
+    routes_info = {}  # route_id -> {nombre, descripcion}
+    
+    routes_path = os.path.join(base_path, 'routes.txt')
+    if os.path.exists(routes_path):
+        try:
+            with open(routes_path, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    try:
+                        route_id = row['route_id']
+                        if route_id in route_to_shapes:
+                            routes_info[route_id] = {
+                                'nombre': row.get('route_short_name', ''),
+                                'descripcion': row.get('route_desc', '')
+                            }
+                    except:
+                        continue
+        except Exception as e:
+            print(f'[DATA] Error cargando routes: {e}', flush=True)
+    
+    print(f'[DATA] Routes identificadas en CABA: {len(routes_info)}', flush=True)
+    
+    # 4. Construir recorridos finales (limitar para no sobrecargar)
+    recorridos = []
+    max_recorridos = 100  # Limitar para performance
+    
+    for route_id, info in routes_info.items():
+        if len(recorridos) >= max_recorridos:
+            break
+            
+        shape_ids = route_to_shapes.get(route_id, set())
+        if not shape_ids:
+            continue
+            
+        # Tomar el primer shape (podría haber variantes)
+        shape_id = list(shape_ids)[0]
+        shape_data = shapes_caba.get(shape_id)
+        
+        if not shape_data:
+            continue
+            
+        # Ordenar puntos por sequence
+        points = sorted(shape_data['points'], key=lambda x: x['sequence'])
+        
+        # Simplificar polyline (tomar cada N punto para reducir tamaño)
+        simplified = []
+        step = max(1, len(points) // 50)  # Máximo ~50 puntos por recorrido
+        for i in range(0, len(points), step):
+            simplified.append([points[i]['lat'], points[i]['lon']])
+        
+        if len(simplified) >= 2:
+            recorridos.append({
+                'route_id': route_id,
+                'linea': info['nombre'],
+                'descripcion': info['descripcion'],
+                'polyline': simplified
+            })
+    
+    print(f'[DATA] Recorridos finales para mostrar: {len(recorridos)}', flush=True)
+    return recorridos
+
+
 @app.route('/api/hospitales')
 def get_hospitales():
     """Retorna lista de hospitales en CABA"""
@@ -1272,6 +1411,17 @@ def get_colectivos():
         'count': len(paradas), 
         'paradas': paradas,
         'note': 'Muestra paradas filtradas dentro de CABA (máx 500)'
+    })
+
+
+@app.route('/api/colectivos-recorridos')
+def get_colectivos_recorridos():
+    """Retorna recorridos de colectivos que pasan por CABA"""
+    recorridos = load_colectivos_recorridos()
+    return jsonify({
+        'count': len(recorridos),
+        'recorridos': recorridos,
+        'note': 'Recorridos de colectivos filtrados a CABA (máx 100 líneas)'
     })
 
 
