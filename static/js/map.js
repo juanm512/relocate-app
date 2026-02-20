@@ -79,7 +79,9 @@ const state = {
     showTransport: true,
     debugMode: false,
     isLoading: false,
-    hasResults: false
+    hasResults: false,
+    routeLayers: [],  // Capas de rutas dibujadas
+    activeRouteMode: 'walking'  // Modo usado para calcular rutas
 };
 
 // ===== Inicialización =====
@@ -135,18 +137,17 @@ function initMap() {
 
 // Manejar clic en el mapa
 function handleMapClick(e) {
-    // Si hay resultados, no permitir cambiar ubicación
-    if (state.hasResults) {
-        showStatus('⚠️ Tenés resultados cargados. Hacé clic en "Nuevo cálculo" para cambiar la ubicación.', 'error');
-        document.getElementById('block-message').style.display = 'block';
-        return;
-    }
-    
     const { lat, lng } = e.latlng;
     
     // Verificar si está dentro de CABA aproximadamente
     if (lat < -34.75 || lat > -34.52 || lng < -58.53 || lng > -58.33) {
         showStatus('Por favor seleccioná una ubicación dentro de CABA', 'error');
+        return;
+    }
+    
+    // Si hay resultados, calcular ruta al punto clickeado
+    if (state.hasResults) {
+        calculateRouteToPoint(lat, lng);
         return;
     }
     
@@ -635,6 +636,9 @@ function resetCalculation() {
     // Limpiar isócronas
     clearIsochrones();
     
+    // Limpiar rutas
+    clearRoutes();
+    
     // Ocultar panel de capas
     document.getElementById('layers-panel').style.display = 'none';
     
@@ -870,6 +874,7 @@ async function generateIsochrones() {
         
         // Marcar que hay resultados y bloquear interfaz
         state.hasResults = true;
+        state.activeRouteMode = state.primaryMode;  // Guardar modo para rutas
         lockInterface();
         
         // Aplicar configuración de visualización
@@ -878,7 +883,7 @@ async function generateIsochrones() {
         const successMsg = state.viewMode === 'single' 
             ? `✅ Mapa de ${CONFIG.modeColorSchemes[state.primaryMode].label} generado`
             : `✅ Comparación: ${CONFIG.modeColorSchemes[state.primaryMode].label} vs ${CONFIG.modeColorSchemes[state.secondaryMode].label}`;
-        showStatus(successMsg + '. Hacé clic en "Nuevo cálculo" para cambiar.', 'success');
+        showStatus(successMsg + '. Hacé clic en el mapa para ver rutas.', 'success');
         
         // Si hay transporte público en los modos seleccionados
         const hasPublicTransport = modesToCalculate.some(m => m.mode === 'public_transport');
@@ -1227,6 +1232,178 @@ async function checkApiStatus() {
     }
 }
 
+// ===== Funciones de Rutas (click en mapa después de calcular isócronas) =====
+
+function clearRoutes() {
+    // Limpia las rutas dibujadas del mapa
+    state.routeLayers.forEach(layer => {
+        state.map.removeLayer(layer);
+    });
+    state.routeLayers = [];
+}
+
+async function calculateRouteToPoint(lat, lng) {
+    // Calcula y dibuja rutas desde el trabajo hasta el punto clickeado
+    if (!state.selectedLocation) return;
+    if (!state.hasResults) {
+        showStatus('Primero calculá una isócrona', 'error');
+        return;
+    }
+    
+    // Limpiar rutas anteriores
+    clearRoutes();
+    
+    const fromLat = state.selectedLocation.lat;
+    const fromLng = state.selectedLocation.lng;
+    const mode = state.activeRouteMode;
+    
+    showStatus('Calculando rutas...', 'success');
+    
+    try {
+        const response = await fetch(
+            `/api/route?from_lat=${fromLat}&from_lon=${fromLng}&to_lat=${lat}&to_lon=${lng}&mode=${mode}`
+        );
+        
+        if (!response.ok) {
+            const error = await response.json();
+            showStatus(error.error || 'Error calculando rutas', 'error');
+            return;
+        }
+        
+        const data = await response.json();
+        
+        // Colores según modo
+        const modeColors = {
+            'walking': '#22c55e',
+            'bike': '#3b82f6',
+            'car': '#ef4444'
+        };
+        const baseColor = modeColors[mode] || '#666';
+        
+        // Dibujar ruta más corta (línea continua)
+        if (data.shortest && data.shortest.geometry) {
+            const distKm = (data.shortest.distance / 1000).toFixed(2);
+            const timeMin = Math.round(data.shortest.duration / 60);
+            
+            const shortestLayer = L.geoJSON(data.shortest.geometry, {
+                style: {
+                    color: baseColor,
+                    weight: 6,
+                    opacity: 0.9,
+                    dashArray: null,
+                    lineCap: 'round',
+                    lineJoin: 'round'
+                }
+            }).addTo(state.map);
+            
+            // Tooltip en hover
+            shortestLayer.bindTooltip(
+                `<strong>🛣️ Más corta</strong><br>${distKm} km • ${timeMin} min`,
+                {
+                    sticky: true,
+                    direction: 'top',
+                    className: 'route-tooltip',
+                    opacity: 1
+                }
+            );
+            
+            // Abrir tooltip en hover
+            shortestLayer.on('mouseover', function(e) {
+                this.openTooltip();
+            });
+            shortestLayer.on('mouseout', function(e) {
+                this.closeTooltip();
+            });
+            
+            // Popup al hacer clic
+            shortestLayer.bindPopup(
+                `<strong>🛣️ Ruta más corta</strong><br>` +
+                `📏 Distancia: ${distKm} km<br>` +
+                `⏱️ Tiempo: ${timeMin} min`
+            );
+            
+            state.routeLayers.push(shortestLayer);
+        }
+        
+        // Dibujar ruta más rápida (línea punteada)
+        if (data.fastest && data.fastest.geometry) {
+            const isSameRoute = data.fastest.distance === data.shortest?.distance;
+            
+            if (!isSameRoute) {
+                const distKm = (data.fastest.distance / 1000).toFixed(2);
+                const timeMin = Math.round(data.fastest.duration / 60);
+                
+                const fastestLayer = L.geoJSON(data.fastest.geometry, {
+                    style: {
+                        color: baseColor,
+                        weight: 5,
+                        opacity: 0.7,
+                        dashArray: '10, 10',
+                        lineCap: 'round',
+                        lineJoin: 'round'
+                    }
+                }).addTo(state.map);
+                
+                // Tooltip en hover
+                fastestLayer.bindTooltip(
+                    `<strong>⚡ Más rápida</strong><br>${distKm} km • ${timeMin} min`,
+                    {
+                        sticky: true,
+                        direction: 'top',
+                        className: 'route-tooltip',
+                        opacity: 1
+                    }
+                );
+                
+                // Abrir tooltip en hover
+                fastestLayer.on('mouseover', function(e) {
+                    this.openTooltip();
+                });
+                fastestLayer.on('mouseout', function(e) {
+                    this.closeTooltip();
+                });
+                
+                // Popup al hacer clic
+                fastestLayer.bindPopup(
+                    `<strong>⚡ Ruta más rápida</strong><br>` +
+                    `📏 Distancia: ${distKm} km<br>` +
+                    `⏱️ Tiempo: ${timeMin} min`
+                );
+                
+                state.routeLayers.push(fastestLayer);
+            }
+        }
+        
+        // Agregar marcador en el destino
+        const destMarker = L.marker([lat, lng], {
+            icon: L.divIcon({
+                className: 'route-destination-marker',
+                html: '<div style="background: ' + baseColor + '; width: 14px; height: 14px; border-radius: 50%; border: 3px solid white; box-shadow: 0 2px 6px rgba(0,0,0,0.3);"></div>',
+                iconSize: [20, 20],
+                iconAnchor: [10, 10]
+            })
+        }).addTo(state.map);
+        
+        destMarker.bindPopup('<strong>Destino seleccionado</strong><br>Haz clic en otro punto para calcular nueva ruta');
+        state.routeLayers.push(destMarker);
+        
+        showStatus('✅ Rutas calculadas', 'success');
+        
+    } catch (error) {
+        console.error('Error calculando rutas:', error);
+        showStatus('Error calculando rutas', 'error');
+    }
+}
+
+// Handler para click en modo rutas (después de calcular isócronas)
+function onRouteMapClick(e) {
+    // Solo si ya hay isócronas calculadas
+    if (!state.hasResults) return;
+    
+    const { lat, lng } = e.latlng;
+    calculateRouteToPoint(lat, lng);
+}
+
 // ===== Estilos adicionales para labels =====
 const style = document.createElement('style');
 style.textContent = `
@@ -1241,6 +1418,20 @@ style.textContent = `
     }
     .leaflet-tooltip-left:before, .leaflet-tooltip-right:before {
         display: none !important;
+    }
+    .route-tooltip {
+        background: rgba(0, 0, 0, 0.85) !important;
+        color: white !important;
+        border: none !important;
+        border-radius: 6px !important;
+        padding: 6px 12px !important;
+        font-weight: 500 !important;
+        font-size: 13px !important;
+        white-space: nowrap !important;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.3) !important;
+    }
+    .route-tooltip:before {
+        border-top-color: rgba(0, 0, 0, 0.85) !important;
     }
 `;
 document.head.appendChild(style);

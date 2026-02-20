@@ -1031,5 +1031,91 @@ def health_check():
     })
 
 
+# URL base para direcciones (rutas)
+ORS_DIRECTIONS_URL = 'https://api.openrouteservice.org/v2/directions'
+
+@app.route('/api/route')
+def get_route():
+    """
+    Calcula rutas desde origen hasta destino.
+    Retorna ruta rápida (fastest) y ruta más corta (shortest).
+    """
+    # Parámetros requeridos
+    from_lat = request.args.get('from_lat')
+    from_lon = request.args.get('from_lon')
+    to_lat = request.args.get('to_lat')
+    to_lon = request.args.get('to_lon')
+    mode = request.args.get('mode', 'car')
+    
+    # Validación
+    if not all([from_lat, from_lon, to_lat, to_lon]):
+        return jsonify({'error': 'Faltan parámetros: from_lat, from_lon, to_lat, to_lon'}), 400
+    
+    if mode not in TRANSPORT_MODES:
+        return jsonify({'error': f'Modo no válido. Use: {list(TRANSPORT_MODES.keys())}'}), 400
+    
+    if not ORS_API_KEY:
+        return jsonify({'error': 'API key no configurada'}), 503
+    
+    ors_mode = TRANSPORT_MODES[mode]
+    
+    # Coordenadas [lon, lat] para ORS
+    from_coord = [float(from_lon), float(from_lat)]
+    to_coord = [float(to_lon), float(to_lat)]
+    
+    def fetch_route(preference):
+        """Llama a ORS Directions API"""
+        try:
+            response = requests.post(
+                f"{ORS_DIRECTIONS_URL}/{ors_mode}/geojson",
+                headers={
+                    'Authorization': ORS_API_KEY,
+                    'Content-Type': 'application/json'
+                },
+                json={
+                    'coordinates': [from_coord, to_coord],
+                    'preference': preference,
+                    'units': 'm',
+                    'geometry': True
+                },
+                timeout=30
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            if 'features' in data and len(data['features']) > 0:
+                feature = data['features'][0]
+                props = feature.get('properties', {})
+                segments = props.get('segments', [{}])[0]
+                
+                return {
+                    'geometry': feature.get('geometry'),
+                    'distance': segments.get('distance', 0),  # metros
+                    'duration': segments.get('duration', 0),  # segundos
+                    'success': True
+                }
+        except Exception as e:
+            print(f'[ROUTE] Error en preference={preference}: {e}', flush=True)
+        
+        return {'success': False}
+    
+    # Obtener ambas rutas
+    fastest = fetch_route('fastest')  # Menor tiempo
+    shortest = fetch_route('shortest')  # Menor distancia
+    
+    result = {
+        'from': {'lat': float(from_lat), 'lon': float(from_lon)},
+        'to': {'lat': float(to_lat), 'lon': float(to_lon)},
+        'mode': mode,
+        'fastest': fastest if fastest['success'] else None,
+        'shortest': shortest if shortest['success'] else None
+    }
+    
+    if not fastest['success'] and not shortest['success']:
+        return jsonify({'error': 'No se pudieron calcular las rutas'}), 500
+    
+    return jsonify(result)
+
+
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
