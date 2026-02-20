@@ -1024,7 +1024,46 @@ def get_transport_lines():
 # ===== Datos de servicios y seguridad =====
 
 def load_hospitales():
-    """Carga hospitales desde CSV y convierte coordenadas"""
+    """Carga hospitales desde CSV con coordenadas corregidas manualmente para los principales"""
+    import csv
+    
+    # Coordenadas manuales para hospitales principales (lat, lon)
+    # Basado en Google Maps / datos abiertos BA
+    COORDS_MANUALES = {
+        'Dr. J. Garrahan': (-34.6285, -58.3840),  # Combate de los Pozos 1881
+        'Emerg Psiquiatricas Torcuato de Alvear': (-34.5960, -58.4620),  # Warnes 2630
+        'Gastroenterologia B. Udaondo': (-34.6325, -58.3845),  # Caseros 2061
+        'Infecciosas F. Muñiz': (-34.6365, -58.3865),  # Uspallata 2272
+        'Odontologia  J. Dueñas': (-34.6075, -58.4200),  # Muñiz 15
+        'Odontologia Infantil Don Benito Quinquela Martin': (-34.6350, -58.3530),  # Pedro de Mendoza 1795
+        'Oftalmologia Santa Lucia': (-34.6140, -58.3845),  # San Juan 2021
+        'Quemados Dr. Arturo Umberto Illia': (-34.6220, -58.4270),  # Pedro Goyena 369
+        'Rehabilitacion M. Rocca': (-34.6140, -58.5080),  # Segurola 1949
+        'Rehabilitacion Respiratoria Maria Ferrer': (-34.6280, -58.3660),  # Finochietto 849
+        'Salud Mental Braulio Moyano': (-34.6360, -58.3630),  # Brandsen 2570
+        'Salud Mental J. Borda': (-34.6365, -58.3605),  # Ramón Carrillo 375
+        'Infanto Juvenil C. Tobar Garcia': (-34.6360, -58.3600),  # Ramón Carrillo 315
+        'Materno Infantil R. Sarda': (-34.6305, -58.3855),  # Esteban de Luca 2151
+        'Odontologico Dr. R. Carrillo': (-34.5895, -58.4055),  # Sánchez de Bustamante 2529
+        'Oftalmologico Dr. P. Lagleyze': (-34.6030, -58.4730),  # Juan B. Justo 4151
+        'A. Zubizarreta': (-34.6000, -58.5120),  # Nueva York 3952
+        'B. Rivadavia': (-34.5880, -58.4040),  # Las Heras 2670
+        'Cecilia Grierson': (-34.6520, -58.4560),  # Fernández de la Cruz 4402
+        'C. Durand': (-34.6095, -58.4375),  # Chiclana 3400
+        'Dr. C. Argerich': (-34.6225, -58.3650),  # Pi y Margall 750
+        'Dr. J. A. Fernandez': (-34.5885, -58.3975),  # Córdoba 3351
+        'General de Agudos Dr. I. Pirovano': (-34.5850, -58.4600),  # Warnes 1240
+        'J. M. Ramos Mejia': (-34.6035, -58.4100),  # General Urquiza 609
+        'Pedro de Elizalde': (-34.6280, -58.3750),  # Manuel García 353
+        'Santojanni': (-34.6580, -58.5150),  # Pilcomayo 950
+        'T. Alvarez': (-34.6120, -58.4720),  # Olivera 1880
+        'A. Posadas': (-34.6310, -58.5250),  # Mariano Castex 3150
+        'C. H. Gallardo': (-34.5940, -58.4290),  # Gallardo 450
+        'D. Velez Sarsfield': (-34.6250, -58.4930),  # Calderón de la Barca 1550
+        'Gutierrez': (-34.5930, -58.4120),  # Gallo 1330
+        'J. P. Garrahan': (-34.6285, -58.3840),  # Combate de los Pozos 1881 (mismo)
+    }
+    
     hospitales = []
     csv_path = os.path.join(os.path.dirname(__file__), 'data', 'hospitales.csv')
     
@@ -1032,47 +1071,42 @@ def load_hospitales():
         return []
     
     try:
-        import csv
         with open(csv_path, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             for row in reader:
-                # Las coordenadas están en sistema proyectado (POSGAR 2007)
-                # Los valores parecen ser en metros desde un origen en CABA
-                # Basándonos en los datos: valores ~20000-30000 en X (E-O), ~60000-75000 en Y (N-S)
-                # Aproximación para CABA: el centro está en X~25000, Y~70000
-                # 1 grado latitud ~ 111000 metros
-                # 1 grado longitud ~ 111000 * cos(lat) metros
+                name = row.get('nam', '')
                 
-                geom = row.get('geometry', '')
-                if 'POINT' in geom:
-                    # Extraer coordenadas del formato POINT (x y)
-                    coords = geom.replace('POINT (', '').replace(')', '').split()
-                    if len(coords) == 2:
-                        x = float(coords[0])  # Coordenada Este (metros)
-                        y = float(coords[1])  # Coordenada Norte (metros)
-                        
-                        # Referencia aproximada: 
-                        # Centro de CABA ~ X=25000, Y=70000 -> lat=-34.6, lon=-58.4
-                        # Entonces: 
-                        # lat = -34.6 - (y - 70000) / 111000
-                        # lon = -58.4 + (x - 25000) / (111000 * cos(radians(-34.6)))
-                        
-                        lat = -34.6 + (y - 70000) / 111000
-                        lon = -58.4 + (x - 25000) / (111000 * cos(radians(-34.6)))
-                        
-                        # Verificar que esté dentro de CABA
-                        if -34.75 <= lat <= -34.52 and -58.53 <= lon <= -58.33:
-                            hospitales.append({
-                                'name': row.get('nam', ''),
-                                'type': row.get('gna', ''),
-                                'specialty': row.get('esp', ''),
-                                'address': row.get('dir', ''),
-                                'neighborhood': row.get('bar', ''),
-                                'phone': row.get('tel', ''),
-                                'web': row.get('web', ''),
-                                'lat': lat,
-                                'lon': lon
-                            })
+                # Buscar coordenadas manuales
+                lat, lon = None, None
+                for key, coords in COORDS_MANUALES.items():
+                    if key in name:
+                        lat, lon = coords
+                        break
+                
+                # Si no hay coordenadas manuales, intentar convertir del CSV
+                if lat is None:
+                    geom = row.get('geometry', '')
+                    if 'POINT' in geom:
+                        coords = geom.replace('POINT (', '').replace(')', '').split()
+                        if len(coords) == 2:
+                            x = float(coords[0])
+                            y = float(coords[1])
+                            # Conversión aproximada ajustada
+                            lat = -34.62 + (y - 68000) / 111000
+                            lon = -58.47 + (x - 22000) / 92000
+                
+                if lat and lon and -34.75 <= lat <= -34.52 and -58.53 <= lon <= -58.33:
+                    hospitales.append({
+                        'name': name,
+                        'type': row.get('gna', ''),
+                        'specialty': row.get('esp', ''),
+                        'address': row.get('dir', ''),
+                        'neighborhood': row.get('bar', ''),
+                        'phone': row.get('tel', ''),
+                        'web': row.get('web', ''),
+                        'lat': lat,
+                        'lon': lon
+                    })
     except Exception as e:
         print(f'[DATA] Error cargando hospitales: {e}', flush=True)
     
@@ -1142,7 +1176,8 @@ def load_barrios_populares():
                                 try:
                                     lon = float(parts[0])
                                     lat = float(parts[1])
-                                    polygon.append([lon, lat])
+                                    # Leaflet usa [lat, lon], no [lon, lat]
+                                    polygon.append([lat, lon])
                                 except ValueError:
                                     continue
                         
@@ -1168,33 +1203,39 @@ def load_colectivos_caba():
     
     try:
         import csv
+        import random
+        
         # Límites aproximados de CABA
         min_lat, max_lat = -34.75, -34.52
         min_lon, max_lon = -58.53, -58.33
         
-        count = 0
-        max_paradas = 500  # Limitar para no sobrecargar
+        # Primero recolectar todas las paradas de CABA
+        paradas_caba = []
         
         with open(stops_path, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             for row in reader:
-                if count >= max_paradas:
-                    break
-                    
                 try:
                     lat = float(row.get('stop_lat', 0))
                     lon = float(row.get('stop_lon', 0))
                     
                     # Filtrar solo paradas dentro de CABA
                     if min_lat <= lat <= max_lat and min_lon <= lon <= max_lon:
-                        paradas.append({
+                        paradas_caba.append({
                             'name': row.get('stop_name', ''),
                             'lat': lat,
                             'lon': lon
                         })
-                        count += 1
                 except:
                     continue
+        
+        # Limitar a 500 paradas aleatorias para no sobrecargar
+        if len(paradas_caba) > 500:
+            paradas = random.sample(paradas_caba, 500)
+        else:
+            paradas = paradas_caba
+            
+        print(f'[DATA] Colectivos: {len(paradas_caba)} en CABA, mostrando {len(paradas)}', flush=True)
                     
     except Exception as e:
         print(f'[DATA] Error cargando colectivos: {e}', flush=True)
