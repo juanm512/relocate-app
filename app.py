@@ -1021,6 +1021,206 @@ def get_transport_lines():
     return jsonify(transport_lines)
 
 
+# ===== Datos de servicios y seguridad =====
+
+def load_hospitales():
+    """Carga hospitales desde CSV y convierte coordenadas"""
+    hospitales = []
+    csv_path = os.path.join(os.path.dirname(__file__), 'data', 'hospitales.csv')
+    
+    if not os.path.exists(csv_path):
+        return []
+    
+    try:
+        import csv
+        with open(csv_path, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                # Las coordenadas están en sistema proyectado (aproximadamente POSGAR 2007)
+                # Necesitamos convertir de metros a lat/lon aproximado para CABA
+                # CABA está aproximadamente en: lat -34.6, lon -58.4
+                # Las coordenadas del CSV parecen ser metros desde un origen
+                # Aproximación: -34.6 - (y/111000), -58.4 - (x/111000*cos(lat))
+                
+                geom = row.get('geometry', '')
+                if 'POINT' in geom:
+                    # Extraer coordenadas del formato POINT (x y)
+                    coords = geom.replace('POINT (', '').replace(')', '').split()
+                    if len(coords) == 2:
+                        x = float(coords[0])
+                        y = float(coords[1])
+                        # Conversión aproximada para CABA (POSGAR 2007 aproximado)
+                        # Origen aproximado para CABA: -34.6, -58.4
+                        lat = -34.6 - (y / 111000)
+                        lon = -58.4 - (x / (111000 * cos(radians(-34.6))))
+                        
+                        hospitales.append({
+                            'name': row.get('nam', ''),
+                            'type': row.get('gna', ''),
+                            'specialty': row.get('esp', ''),
+                            'address': row.get('dir', ''),
+                            'neighborhood': row.get('bar', ''),
+                            'phone': row.get('tel', ''),
+                            'web': row.get('web', ''),
+                            'lat': lat,
+                            'lon': lon
+                        })
+    except Exception as e:
+        print(f'[DATA] Error cargando hospitales: {e}', flush=True)
+    
+    return hospitales
+
+
+def load_comisarias():
+    """Carga comisarías desde CSV"""
+    comisarias = []
+    csv_path = os.path.join(os.path.dirname(__file__), 'data', 'comisarias_policia.csv')
+    
+    if not os.path.exists(csv_path):
+        return []
+    
+    try:
+        import csv
+        with open(csv_path, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                geom = row.get('geometry', '')
+                if 'POINT' in geom:
+                    coords = geom.replace('POINT (', '').replace(')', '').split()
+                    if len(coords) == 2:
+                        lon = float(coords[0])
+                        lat = float(coords[1])
+                        
+                        comisarias.append({
+                            'name': row.get('nombre', ''),
+                            'address': row.get('direccion', ''),
+                            'neighborhood': row.get('barrio', ''),
+                            'phone': row.get('telefonos', ''),
+                            'lat': lat,
+                            'lon': lon
+                        })
+    except Exception as e:
+        print(f'[DATA] Error cargando comisarias: {e}', flush=True)
+    
+    return comisarias
+
+
+def load_barrios_populares():
+    """Carga barrios populares (zonas vulnerables) desde CSV"""
+    barrios = []
+    csv_path = os.path.join(os.path.dirname(__file__), 'data', 'barrios_populares_poligono.csv')
+    
+    if not os.path.exists(csv_path):
+        return []
+    
+    try:
+        import csv
+        import re
+        with open(csv_path, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                geom = row.get('geometry', '')
+                if 'POLYGON' in geom:
+                    # Extraer coordenadas del polígono
+                    coords_str = re.findall(r'\(([^)]+)\)', geom)
+                    if coords_str:
+                        coords = coords_str[0].split(',')
+                        polygon = []
+                        for coord in coords:
+                            parts = coord.strip().split()
+                            if len(parts) == 2:
+                                lon = float(parts[0])
+                                lat = float(parts[1])
+                                polygon.append([lon, lat])
+                        
+                        if len(polygon) >= 3:
+                            barrios.append({
+                                'name': row.get('nombre', ''),
+                                'type': row.get('tipo', ''),
+                                'polygon': polygon
+                            })
+    except Exception as e:
+        print(f'[DATA] Error cargando barrios populares: {e}', flush=True)
+    
+    return barrios
+
+
+def load_colectivos_caba():
+    """Carga paradas de colectivos dentro de CABA desde GTFS"""
+    paradas = []
+    stops_path = os.path.join(os.path.dirname(__file__), 'data', 'colectivos-gtfs', 'stops.txt')
+    
+    if not os.path.exists(stops_path):
+        return []
+    
+    try:
+        import csv
+        # Límites aproximados de CABA
+        min_lat, max_lat = -34.75, -34.52
+        min_lon, max_lon = -58.53, -58.33
+        
+        count = 0
+        max_paradas = 500  # Limitar para no sobrecargar
+        
+        with open(stops_path, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if count >= max_paradas:
+                    break
+                    
+                try:
+                    lat = float(row.get('stop_lat', 0))
+                    lon = float(row.get('stop_lon', 0))
+                    
+                    # Filtrar solo paradas dentro de CABA
+                    if min_lat <= lat <= max_lat and min_lon <= lon <= max_lon:
+                        paradas.append({
+                            'name': row.get('stop_name', ''),
+                            'lat': lat,
+                            'lon': lon
+                        })
+                        count += 1
+                except:
+                    continue
+                    
+    except Exception as e:
+        print(f'[DATA] Error cargando colectivos: {e}', flush=True)
+    
+    return paradas
+
+
+@app.route('/api/hospitales')
+def get_hospitales():
+    """Retorna lista de hospitales en CABA"""
+    hospitales = load_hospitales()
+    return jsonify({'count': len(hospitales), 'hospitales': hospitales})
+
+
+@app.route('/api/comisarias')
+def get_comisarias():
+    """Retorna lista de comisarías en CABA"""
+    comisarias = load_comisarias()
+    return jsonify({'count': len(comisarias), 'comisarias': comisarias})
+
+
+@app.route('/api/barrios-populares')
+def get_barrios_populares():
+    """Retorna polígonos de barrios populares/asentamientos"""
+    barrios = load_barrios_populares()
+    return jsonify({'count': len(barrios), 'barrios': barrios})
+
+
+@app.route('/api/colectivos')
+def get_colectivos():
+    """Retorna paradas de colectivos dentro de CABA"""
+    paradas = load_colectivos_caba()
+    return jsonify({
+        'count': len(paradas), 
+        'paradas': paradas,
+        'note': 'Muestra paradas filtradas dentro de CABA (máx 500)'
+    })
+
+
 @app.route('/api/health')
 def health_check():
     """Endpoint de salud"""

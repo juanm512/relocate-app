@@ -89,6 +89,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initMap();
     initEventListeners();
     loadTransportLines();
+    loadServicesLayers();
     checkApiStatus();
 });
 
@@ -285,6 +286,23 @@ function initEventListeners() {
         if (state.hasResults) {
             toggleDebugVisibility();
         }
+    });
+    
+    // Checkboxes de servicios y seguridad
+    document.getElementById('show-hospitales').addEventListener('change', (e) => {
+        toggleServicesLayer('hospitales', e.target.checked);
+    });
+    
+    document.getElementById('show-comisarias').addEventListener('change', (e) => {
+        toggleServicesLayer('comisarias', e.target.checked);
+    });
+    
+    document.getElementById('show-barrios').addEventListener('change', (e) => {
+        toggleServicesLayer('barrios', e.target.checked);
+    });
+    
+    document.getElementById('show-colectivos').addEventListener('change', (e) => {
+        toggleServicesLayer('colectivos', e.target.checked);
     });
     
     // Checkbox de mostrar solo envolvente
@@ -1192,6 +1210,130 @@ function toggleTransportLayer() {
 function highlightStationsInArea() {
     // TODO: Implementar detección de estaciones dentro de la isócrona
     // Por ahora, mostramos todas las estaciones
+}
+
+// ===== Capas de servicios y seguridad =====
+
+async function loadServicesLayers() {
+    // Carga hospitales, comisarías, barrios populares y colectivos
+    
+    // Crear grupos de capas
+    state.servicesLayers = {
+        hospitales: L.layerGroup(),
+        comisarias: L.layerGroup(),
+        barrios: L.layerGroup(),
+        colectivos: L.layerGroup()
+    };
+    
+    // Cargar hospitales
+    try {
+        const response = await fetch('/api/hospitales');
+        const data = await response.json();
+        
+        data.hospitales.forEach(h => {
+            const marker = L.circleMarker([h.lat, h.lon], {
+                radius: 8,
+                fillColor: '#e11d48',  // Rojo médico
+                color: '#fff',
+                weight: 2,
+                fillOpacity: 0.9
+            }).bindPopup(
+                `<strong>🏥 ${h.name}</strong><br>` +
+                `<em>${h.type}</em><br>` +
+                `${h.specialty ? h.specialty + '<br>' : ''}` +
+                `📍 ${h.address}, ${h.neighborhood}<br>` +
+                `${h.phone ? '📞 ' + h.phone + '<br>' : ''}` +
+                `${h.web ? '🌐 <a href="http://' + h.web.replace(/^https?:\/\//, '') + '" target="_blank">Web</a>' : ''}`
+            );
+            state.servicesLayers.hospitales.addLayer(marker);
+        });
+        
+        console.log(`[SERVICES] Cargados ${data.count} hospitales`);
+    } catch (e) {
+        console.error('Error cargando hospitales:', e);
+    }
+    
+    // Cargar comisarías
+    try {
+        const response = await fetch('/api/comisarias');
+        const data = await response.json();
+        
+        data.comisarias.forEach(c => {
+            const marker = L.circleMarker([c.lat, c.lon], {
+                radius: 7,
+                fillColor: '#2563eb',  // Azul policía
+                color: '#fff',
+                weight: 2,
+                fillOpacity: 0.9
+            }).bindPopup(
+                `<strong>👮 ${c.name}</strong><br>` +
+                `📍 ${c.address}, ${c.neighborhood}<br>` +
+                `${c.phone ? '📞 ' + c.phone : ''}`
+            );
+            state.servicesLayers.comisarias.addLayer(marker);
+        });
+        
+        console.log(`[SERVICES] Cargadas ${data.count} comisarías`);
+    } catch (e) {
+        console.error('Error cargando comisarías:', e);
+    }
+    
+    // Cargar barrios populares (polígonos)
+    try {
+        const response = await fetch('/api/barrios-populares');
+        const data = await response.json();
+        
+        data.barrios.forEach(b => {
+            const polygon = L.polygon(b.polygon, {
+                color: '#ea580c',  // Naranja precaución
+                weight: 2,
+                fillColor: '#ea580c',
+                fillOpacity: 0.15,
+                dashArray: '5, 5'
+            }).bindPopup(
+                `<strong>⚠️ ${b.name}</strong><br>` +
+                `<em>${b.type}</em><br>` +
+                `<small>Zona de precaución</small>`
+            );
+            state.servicesLayers.barrios.addLayer(polygon);
+        });
+        
+        console.log(`[SERVICES] Cargados ${data.count} barrios populares`);
+    } catch (e) {
+        console.error('Error cargando barrios populares:', e);
+    }
+    
+    // Cargar colectivos (paradas)
+    try {
+        const response = await fetch('/api/colectivos');
+        const data = await response.json();
+        
+        data.paradas.forEach(p => {
+            const marker = L.circleMarker([p.lat, p.lon], {
+                radius: 4,
+                fillColor: '#16a34a',  // Verde colectivo
+                color: '#fff',
+                weight: 1,
+                fillOpacity: 0.7
+            }).bindPopup(`<strong>🚌 ${p.name}</strong>`);
+            state.servicesLayers.colectivos.addLayer(marker);
+        });
+        
+        console.log(`[SERVICES] Cargadas ${data.count} paradas de colectivo`);
+    } catch (e) {
+        console.error('Error cargando colectivos:', e);
+    }
+}
+
+function toggleServicesLayer(type, show) {
+    // Muestra u oculta una capa de servicios
+    if (!state.servicesLayers || !state.servicesLayers[type]) return;
+    
+    if (show) {
+        state.servicesLayers[type].addTo(state.map);
+    } else {
+        state.map.removeLayer(state.servicesLayers[type]);
+    }
 }
 
 // ===== Utilidades =====
