@@ -1036,35 +1036,43 @@ def load_hospitales():
         with open(csv_path, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             for row in reader:
-                # Las coordenadas están en sistema proyectado (aproximadamente POSGAR 2007)
-                # Necesitamos convertir de metros a lat/lon aproximado para CABA
-                # CABA está aproximadamente en: lat -34.6, lon -58.4
-                # Las coordenadas del CSV parecen ser metros desde un origen
-                # Aproximación: -34.6 - (y/111000), -58.4 - (x/111000*cos(lat))
+                # Las coordenadas están en sistema proyectado (POSGAR 2007)
+                # Los valores parecen ser en metros desde un origen en CABA
+                # Basándonos en los datos: valores ~20000-30000 en X (E-O), ~60000-75000 en Y (N-S)
+                # Aproximación para CABA: el centro está en X~25000, Y~70000
+                # 1 grado latitud ~ 111000 metros
+                # 1 grado longitud ~ 111000 * cos(lat) metros
                 
                 geom = row.get('geometry', '')
                 if 'POINT' in geom:
                     # Extraer coordenadas del formato POINT (x y)
                     coords = geom.replace('POINT (', '').replace(')', '').split()
                     if len(coords) == 2:
-                        x = float(coords[0])
-                        y = float(coords[1])
-                        # Conversión aproximada para CABA (POSGAR 2007 aproximado)
-                        # Origen aproximado para CABA: -34.6, -58.4
-                        lat = -34.6 - (y / 111000)
-                        lon = -58.4 - (x / (111000 * cos(radians(-34.6))))
+                        x = float(coords[0])  # Coordenada Este (metros)
+                        y = float(coords[1])  # Coordenada Norte (metros)
                         
-                        hospitales.append({
-                            'name': row.get('nam', ''),
-                            'type': row.get('gna', ''),
-                            'specialty': row.get('esp', ''),
-                            'address': row.get('dir', ''),
-                            'neighborhood': row.get('bar', ''),
-                            'phone': row.get('tel', ''),
-                            'web': row.get('web', ''),
-                            'lat': lat,
-                            'lon': lon
-                        })
+                        # Referencia aproximada: 
+                        # Centro de CABA ~ X=25000, Y=70000 -> lat=-34.6, lon=-58.4
+                        # Entonces: 
+                        # lat = -34.6 - (y - 70000) / 111000
+                        # lon = -58.4 + (x - 25000) / (111000 * cos(radians(-34.6)))
+                        
+                        lat = -34.6 + (y - 70000) / 111000
+                        lon = -58.4 + (x - 25000) / (111000 * cos(radians(-34.6)))
+                        
+                        # Verificar que esté dentro de CABA
+                        if -34.75 <= lat <= -34.52 and -58.53 <= lon <= -58.33:
+                            hospitales.append({
+                                'name': row.get('nam', ''),
+                                'type': row.get('gna', ''),
+                                'specialty': row.get('esp', ''),
+                                'address': row.get('dir', ''),
+                                'neighborhood': row.get('bar', ''),
+                                'phone': row.get('tel', ''),
+                                'web': row.get('web', ''),
+                                'lat': lat,
+                                'lon': lon
+                            })
     except Exception as e:
         print(f'[DATA] Error cargando hospitales: {e}', flush=True)
     
@@ -1122,16 +1130,21 @@ def load_barrios_populares():
                 geom = row.get('geometry', '')
                 if 'POLYGON' in geom:
                     # Extraer coordenadas del polígono
-                    coords_str = re.findall(r'\(([^)]+)\)', geom)
-                    if coords_str:
-                        coords = coords_str[0].split(',')
+                    # Formato: POLYGON ((lon lat, lon lat, ...))
+                    match = re.search(r'\(\(([^)]+)\)\)', geom)
+                    if match:
+                        coords_str = match.group(1)
+                        coords = coords_str.split(',')
                         polygon = []
                         for coord in coords:
                             parts = coord.strip().split()
                             if len(parts) == 2:
-                                lon = float(parts[0])
-                                lat = float(parts[1])
-                                polygon.append([lon, lat])
+                                try:
+                                    lon = float(parts[0])
+                                    lat = float(parts[1])
+                                    polygon.append([lon, lat])
+                                except ValueError:
+                                    continue
                         
                         if len(polygon) >= 3:
                             barrios.append({
