@@ -54,10 +54,30 @@ export function drawTransitCircles(debugInfo, minutes, mode) {
     const MAX_STOP_BUFFER_M = 2000;
     const baseColor = getColorForModeAndTime(mode, minutes, 1);
     
+    // Store unique stops based on coordinate keys
+    const uniqueStops = new Map();
+    const startStops = new Map();
+
+    const getCoordKey = (lat, lon) => `${parseFloat(lat).toFixed(5)},${parseFloat(lon).toFixed(5)}`;
+    
+    // Almacenamos los marcadores generados en esta corrida
+    const createdMarkers = [];
+
     debugInfo.routes_used.forEach((route, idx) => {
-        // Individual line debug colors
         const color = generateLineColor(idx);
         
+        // Track the closest stop (Start)
+        if (route.closest_stop_coords) {
+            const key = getCoordKey(route.closest_stop_coords[0], route.closest_stop_coords[1]);
+            const stopName = typeof route.closest_stop === 'object' ? route.closest_stop.name : route.closest_stop;
+            
+            if (!startStops.has(key)) {
+                startStops.set(key, { lat: route.closest_stop_coords[0], lon: route.closest_stop_coords[1], name: stopName, lines: [] });
+            }
+            startStops.get(key).lines.push({ name: route.name, color, route_id: route.route_id });
+        }
+        
+        // Track reachable stops
         route.stops_reached.forEach(stop => {
             if (stop.lat && stop.lon && stop.walk_radius_meters > 0) {
                 const radiusKm = Math.min(stop.walk_radius_meters, MAX_STOP_BUFFER_M) / 1000.0;
@@ -66,24 +86,64 @@ export function drawTransitCircles(debugInfo, minutes, mode) {
                     circlePolys.push(poly);
                 } catch(e) { }
                 
-                // Keep the circular L.circle debug layers that were here
-                const circle = L.circle([stop.lat, stop.lon], {
-                    radius: stop.walk_radius_meters,
-                    color: color,
-                    weight: 1,
-                    opacity: 0.8,
-                    fillColor: color,
-                    fillOpacity: 0.1
-                });
-                circle.bindPopup(`<b>Parada:</b> ${stop.name}<br><b>Tiempo Restante:</b> ${stop.time_remaining} min`);
-                globalState.debugLayers.push(circle);
-                // Also show immediately if debug is currently toggled on
-                if (globalState.debugVisible) {
-                    circle.addTo(globalState.map);
+                const key = getCoordKey(stop.lat, stop.lon);
+                if (!uniqueStops.has(key)) {
+                    uniqueStops.set(key, { lat: stop.lat, lon: stop.lon, name: stop.name, lines: [], bestTime: 999 });
+                }
+                const entry = uniqueStops.get(key);
+                if (stop.time_remaining < entry.bestTime) entry.bestTime = stop.time_remaining;
+                
+                // Avoid duplicating line names for the same stop if multiple sub-variants hit it
+                if (!entry.lines.some(l => l.name === route.name)) {
+                    entry.lines.push({ name: route.name, color, route_id: route.route_id });
                 }
             }
         });
     });
+
+    // Draw clustered Start Stops
+    startStops.forEach(stop => {
+        const isMulti = stop.lines.length > 1;
+        const mainColor = stop.lines[0].color;
+        const lineTags = stop.lines.map(l => `<span style="background:${l.color};color:white;padding:2px 4px;border-radius:3px;font-size:10px;">${l.name}</span>`).join(' ');
+        
+        const html = `
+            <div style="position:relative; width:28px; height:28px; display:flex; align-items:center; justify-content:center; background:${mainColor}; border:3px solid white; border-radius:50%; box-shadow:0 3px 6px rgba(0,0,0,0.3); font-size:14px; z-index:1000;">
+                🚶
+                ${isMulti ? `<div style="position:absolute; top:-4px; right:-4px; background:#1e293b; color:white; font-size:9px; width:14px; height:14px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:1px solid white; font-weight:bold;">${stop.lines.length}</div>` : ''}
+            </div>`;
+            
+        const icon = L.divIcon({ className: '', html, iconAnchor: [14, 14] });
+        const marker = L.marker([stop.lat, stop.lon], { icon, zIndexOffset: 1000 }).addTo(globalState.map);
+        marker.bindPopup(`<b>Origen: ${stop.name}</b><br><div style="margin-top:4px;">${lineTags}</div>`);
+        marker.routeIds = stop.lines.map(l => l.route_id); // Guardamos que lineas usan la parada
+        globalState.routeLayers.push(marker);
+        createdMarkers.push(marker);
+    });
+
+    // Draw clustered Reachable Stops
+    uniqueStops.forEach(stop => {
+        const isMulti = stop.lines.length > 1;
+        // Si hay multiples líneas, la pintamos de un color neutral (gris oscuro). 
+        // Si es una sola, le damos el color de la propia línea para una lectura más rápida visualmente.
+        const mainColor = isMulti ? '#475569' : stop.lines[0].color;
+        const lineTags = stop.lines.map(l => `<span style="background:${l.color};color:white;padding:2px 4px;border-radius:3px;font-size:10px;">${l.name}</span>`).join(' ');
+        
+        const html = `
+            <div style="position:relative; width:16px; height:16px; display:flex; align-items:center; justify-content:center; background:${mainColor}; border:2px solid white; border-radius:50%; box-shadow:0 1px 4px rgba(0,0,0,0.4); z-index:500;">
+                ${isMulti ? `<div style="position:absolute; top:-6px; right:-6px; background:white; color:#334155; font-size:8px; width:12px; height:12px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:1px solid #cbd5e1; font-weight:bold;">${stop.lines.length}</div>` : ''}
+            </div>`;
+            
+        const icon = L.divIcon({ className: '', html, iconAnchor: [8, 8] });
+        const marker = L.marker([stop.lat, stop.lon], { icon, zIndexOffset: 500 }).addTo(globalState.map);
+        marker.bindPopup(`<b>Parada: ${stop.name}</b><br><span style="color:#64748b;font-size:11px;">Restan aprox. ${parseFloat(stop.bestTime).toFixed(1)} min</span><br><div style="margin-top:4px;">${lineTags}</div>`);
+        marker.routeIds = stop.lines.map(l => l.route_id); // Guardamos que lineas usan la parada
+        globalState.routeLayers.push(marker);
+        createdMarkers.push(marker);
+    });
+    
+    // Guardar la colección de marcadores generados en el estado global
+    globalState.stopMarkers = createdMarkers;
     
     // Add the starting center walk distance as well
     if (debugInfo.max_walk_distance && globalState.selectedLocation) {
@@ -91,15 +151,6 @@ export function drawTransitCircles(debugInfo, minutes, mode) {
         try {
             const poly = turf.circle([globalState.selectedLocation.lon, globalState.selectedLocation.lat], radiusKm, {steps: 32, units: 'kilometers'});
             circlePolys.push(poly);
-            
-            const startCircle = L.circle([globalState.selectedLocation.lat, globalState.selectedLocation.lon], {
-                radius: debugInfo.max_walk_distance,
-                color: '#000', weight: 2, dashArray: '4,4', fillOpacity: 0.1
-            }).bindTooltip('Zona caminable desde origen');
-            globalState.debugLayers.push(startCircle);
-            if (globalState.debugVisible) {
-                startCircle.addTo(globalState.map);
-            }
         } catch(e) { }
     }
     
@@ -197,6 +248,19 @@ export function removeTransitLine(routeId) {
     }
 }
 
+export function highlightTransitLine(routeId, highlight) {
+    const line = globalState.transportLayers[routeId];
+    if (line) {
+        line.setStyle({
+            weight: highlight ? 8 : 4,
+            opacity: highlight ? 1.0 : 0.9
+        });
+        if (highlight) {
+            line.bringToFront();
+        }
+    }
+}
+
 export function clearTransitLines() {
     Object.values(globalState.transportLayers).forEach(layer => {
         globalState.map.removeLayer(layer);
@@ -259,3 +323,25 @@ export function drawPolygons(polygons, color) {
     });
     return layers;
 }
+
+window.updateMarkersVisibility = function (checkedRouteIds, showAllMarkers) {
+    if (!globalState.stopMarkers) return;
+    
+    globalState.stopMarkers.forEach(marker => {
+        if (!showAllMarkers) {
+            globalState.map.removeLayer(marker);
+            return;
+        }
+        
+        // Verifica si al menos una de las líneas que usan esta parada está marcada en la UI
+        const hasActiveRoute = marker.routeIds && marker.routeIds.some(id => checkedRouteIds.includes(id));
+        
+        if (hasActiveRoute) {
+            if (!globalState.map.hasLayer(marker)) {
+                marker.addTo(globalState.map);
+            }
+        } else {
+            globalState.map.removeLayer(marker);
+        }
+    });
+};

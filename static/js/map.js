@@ -200,7 +200,7 @@ async function reverseGeocode(lat, lng) {
             }
         }
     } catch (error) {
-        console.log('No se pudo obtener la dirección exacta');
+        // console.log('No se pudo obtener la dirección exacta');
         // Si falla el reverse geocoding, mostrar coordenadas
         document.getElementById('address').value = `Ubicación seleccionada`;
     }
@@ -400,22 +400,22 @@ function hideDebugInfo() {
 }
 
 function drawDebugCircles(debugInfo) {
-    console.log('Dibujando círculos de debug:', debugInfo);
+    // console.log('Dibujando círculos de debug:', debugInfo);
     
     if (!debugInfo || !debugInfo.routes_used) {
-        console.log('No hay routes_used en debugInfo');
+        // console.log('No hay routes_used en debugInfo');
         return;
     }
     
-    console.log('Rutas encontradas:', debugInfo.routes_used.length);
+    // console.log('Rutas encontradas:', debugInfo.routes_used.length);
     
     debugInfo.routes_used.forEach((route, routeIndex) => {
-        console.log(`Ruta ${routeIndex}: ${route.name}, paradas: ${route.stops_reached ? route.stops_reached.length : 0}`);
+        // console.log(`Ruta ${routeIndex}: ${route.name}, paradas: ${route.stops_reached ? route.stops_reached.length : 0}`);
         
         if (!route.stops_reached) return;
         
         route.stops_reached.forEach((stop, stopIndex) => {
-            console.log(`  Parada ${stopIndex}: ${stop.name}, radio: ${stop.walk_radius_meters}m`);
+            // console.log(`  Parada ${stopIndex}: ${stop.name}, radio: ${stop.walk_radius_meters}m`);
             
             // Círculo de caminata
             const circle = L.circle([stop.lat, stop.lon], {
@@ -762,19 +762,19 @@ async function fetchIsochrone(mode, minutes, isOutline = false) {
         }
         
         // Extraer debug_info - GUARDAR TODA LA DATA para debug
-        console.log('Respuesta completa del servidor:', JSON.stringify(data, null, 2));
+        // console.log('Respuesta completa del servidor:', JSON.stringify(data, null, 2));
         
         let debugInfo = null;
         if (data.isochrone && data.isochrone.properties) {
-            console.log('Propiedades de isochrone:', data.isochrone.properties);
+            // console.log('Propiedades de isochrone:', data.isochrone.properties);
             if (data.isochrone.properties.debug_info) {
                 debugInfo = data.isochrone.properties.debug_info;
-                console.log('✅ DEBUG INFO encontrado:', debugInfo);
+                // console.log('✅ DEBUG INFO encontrado:', debugInfo);
             } else {
-                console.log('❌ No hay debug_info en properties');
+                // console.log('❌ No hay debug_info en properties');
             }
         } else {
-            console.log('❌ No hay isochrone o properties');
+            // console.log('❌ No hay isochrone o properties');
         }
         
         // Dibujar isócrona (relleno o solo contorno)
@@ -932,7 +932,7 @@ function drawTransitCircles(debugInfo, minutes, mode = 'public_transport') {
         return;
     }
 
-    console.log('[DEBUG] circlePolys count:', circlePolys.length);
+    // console.log('[DEBUG] circlePolys count:', circlePolys.length);
     // Merge polygons using Turf.js (cascaded union)
     let merged = null;
     try {
@@ -1345,7 +1345,7 @@ async function loadServicesLayers() {
             state.servicesLayers.hospitales.addLayer(marker);
         });
         
-        console.log(`[SERVICES] Cargados ${data.count} hospitales`);
+        // console.log(`[SERVICES] Cargados ${data.count} hospitales`);
     } catch (e) {
         console.error('Error cargando hospitales:', e);
     }
@@ -1370,7 +1370,7 @@ async function loadServicesLayers() {
             state.servicesLayers.comisarias.addLayer(marker);
         });
         
-        console.log(`[SERVICES] Cargadas ${data.count} comisarías`);
+        // console.log(`[SERVICES] Cargadas ${data.count} comisarías`);
     } catch (e) {
         console.error('Error cargando comisarías:', e);
     }
@@ -1394,7 +1394,7 @@ async function loadServicesLayers() {
             state.servicesLayers.barrios.addLayer(polygon);
         });
         
-        console.log(`[SERVICES] Cargados ${data.count} barrios populares`);
+        // console.log(`[SERVICES] Cargados ${data.count} barrios populares`);
     } catch (e) {
         console.error('Error cargando barrios populares:', e);
     }
@@ -1415,7 +1415,7 @@ async function loadServicesLayers() {
             state.servicesLayers.colectivos.addLayer(marker);
         });
         
-        console.log(`[SERVICES] Cargadas ${data.count} paradas de colectivo`);
+        // console.log(`[SERVICES] Cargadas ${data.count} paradas de colectivo`);
     } catch (e) {
         console.error('Error cargando colectivos:', e);
     }
@@ -1491,7 +1491,7 @@ async function loadServicesLayers() {
             state.servicesLayers.colectivosRecorridos.addLayer(lineGroup);
         });
         
-        console.log(`[SERVICES] Cargados ${data.count} recorridos de colectivo`);
+        // console.log(`[SERVICES] Cargados ${data.count} recorridos de colectivo`);
     } catch (e) {
         console.error('Error cargando recorridos de colectivos:', e);
     }
@@ -1560,7 +1560,7 @@ async function checkApiStatus() {
         const data = await response.json();
         
         if (!data.api_key_configured) {
-            console.log('Modo demo activo - configure ORS_API_KEY para datos reales');
+            // console.log('Modo demo activo - configure ORS_API_KEY para datos reales');
         }
     } catch (error) {
         console.error('Error verificando API:', error);

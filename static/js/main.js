@@ -3,7 +3,7 @@ import { state } from './state.js';
 import { checkApiStatus, fetchIsochrone, fetchPOIs, geocode } from './api.js';
 import { DOM, switchStage, showLoading, hideLoading, updateStatus, updateDemoBadge, updateBlockMessage, updateInvolvedLines } from './ui.js';
 import { initMap, placeWorkMarker } from './map-core.js';
-import { clearIsochrones, drawIsochrone, drawTransitCircles, toggleDebugVisibility, drawPOIs, drawPolygons, drawTransitLine, removeTransitLine } from './map-draw.js';
+import { clearIsochrones, drawIsochrone, drawTransitCircles, toggleDebugVisibility, drawPOIs, drawPolygons, drawTransitLine, removeTransitLine, highlightTransitLine } from './map-draw.js';
 
 let debounceTimer = null;
 let activeFilters = {
@@ -67,11 +67,13 @@ function bindEventListeners() {
     DOM.filterZonasPeligrosas.addEventListener('change', (e) => toggleLayer('barrios-populares', e.target.checked));
 
     // Debug toggle
-    DOM.toggleDebugBtn.addEventListener('click', () => {
-        DOM.toggleDebugBtn.classList.toggle('active');
-        const show = DOM.toggleDebugBtn.classList.contains('active');
-        toggleDebugVisibility(show);
-    });
+    if (DOM.toggleDebugBtn) {
+        DOM.toggleDebugBtn.addEventListener('click', () => {
+            DOM.toggleDebugBtn.classList.toggle('active');
+            const show = DOM.toggleDebugBtn.classList.contains('active');
+            toggleDebugVisibility(show);
+        });
+    }
 
     // Transit Lines Toggles
     document.addEventListener('transitLinesReady', (e) => {
@@ -98,6 +100,93 @@ function bindEventListeners() {
                     }
                 } else {
                     removeTransitLine(routeId);
+                }
+            });
+        });
+
+        const toggleAllBtn = document.getElementById('toggle-all-routes-btn');
+        if (toggleAllBtn) {
+            toggleAllBtn.addEventListener('click', (evt) => {
+                const isAllChecked = evt.target.dataset.allChecked === 'true';
+                const newState = !isAllChecked;
+                
+                evt.target.dataset.allChecked = newState;
+                evt.target.textContent = newState ? 'Marcar todas' : 'Desmarcar todas';
+                
+                checkboxes.forEach(cb => {
+                    if (cb.checked !== newState) {
+                        cb.checked = newState;
+                        cb.dispatchEvent(new Event('change'));
+                    }
+                });
+            });
+        }
+        
+        // --- Markers & Search Optimizations ---
+        const searchInput = document.getElementById('route-search-input');
+        const routeCards = document.querySelectorAll('.route-card');
+        
+        if (searchInput) {
+            searchInput.addEventListener('input', (e) => {
+                const term = e.target.value.toLowerCase();
+                routeCards.forEach(card => {
+                    const idx = card.dataset.idx;
+                    const name = (routes[idx] || {}).name || '';
+                    if (name.toLowerCase().includes(term)) {
+                        card.style.display = 'block';
+                    } else {
+                        card.style.display = 'none';
+                    }
+                });
+            });
+        }
+        
+        const markersToggleBtn = document.getElementById('toggle-markers-checkbox');
+        
+        // Notify map to update marker visibility based on current checked lines
+        const updateAllMarkers = () => {
+            if (typeof window.updateMarkersVisibility === 'function') {
+                const checkedIds = Array.from(checkboxes).filter(cb => cb.checked).map(cb => cb.dataset.routeId);
+                const showMarkers = markersToggleBtn ? markersToggleBtn.checked : true;
+                window.updateMarkersVisibility(checkedIds, showMarkers);
+            }
+        };
+
+        if (markersToggleBtn) {
+            markersToggleBtn.addEventListener('change', updateAllMarkers);
+        }
+        // Bind to line toggles as well
+        checkboxes.forEach(cb => cb.addEventListener('change', updateAllMarkers));
+        
+        // Initial sync of marker visibility
+        setTimeout(updateAllMarkers, 100);
+        
+        routeCards.forEach(card => {
+            const routeId = card.dataset.routeId;
+            const idx = parseInt(card.dataset.idx, 10);
+            const routeData = routes.find(r => r.route_id === routeId || r.name === routeId) || routes[idx];
+            
+            const cb = card.querySelector('.route-toggle-checkbox');
+            const color = window.getComputedStyle(cb).accentColor || `hsl(${[0, 210, 120, 280, 45, 180, 320, 15, 250, 75][idx % 10]}, 80%, 45%)`;
+            
+            card.addEventListener('mouseenter', () => {
+                card.style.borderColor = color;
+                card.style.boxShadow = `0 0 0 1px ${color}`;
+                if (!cb.checked && routeData && routeData.polyline) {
+                    drawTransitLine(routeId, routeData.polyline, color, routeData.name);
+                    highlightTransitLine(routeId, true);
+                } else if (cb.checked) {
+                    highlightTransitLine(routeId, true);
+                }
+            });
+            
+            card.addEventListener('mouseleave', () => {
+                card.style.borderColor = '#e2e8f0';
+                card.style.boxShadow = 'none';
+                if (!cb.checked) {
+                    removeTransitLine(routeId);
+                } else if (cb.checked) {
+                    highlightTransitLine(routeId, false);
                 }
             });
         });
@@ -199,12 +288,14 @@ async function generateIsochrones() {
         // Draw debug circles and info
         if (data.isochrone.properties && data.isochrone.properties.debug_info) {
             const di = data.isochrone.properties.debug_info;
-            DOM.toggleDebugBtn.style.display = 'inline-block';
+            if (DOM.toggleDebugBtn) DOM.toggleDebugBtn.style.display = 'inline-block';
             drawTransitCircles(di, state.currentMinutes, state.currentMode);
             updateInvolvedLines(di, state.currentMode);
         } else {
-            DOM.toggleDebugBtn.style.display = 'none';
-            DOM.toggleDebugBtn.classList.remove('active');
+            if (DOM.toggleDebugBtn) {
+                DOM.toggleDebugBtn.style.display = 'none';
+                DOM.toggleDebugBtn.classList.remove('active');
+            }
             updateInvolvedLines(null, state.currentMode);
         }
         

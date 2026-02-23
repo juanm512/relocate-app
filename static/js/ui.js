@@ -36,8 +36,10 @@ export function switchStage(stage) {
         DOM.filterHospitales.checked = false;
         DOM.filterComisarias.checked = false;
         DOM.filterZonasPeligrosas.checked = false;
-        DOM.toggleDebugBtn.classList.remove('active');
-        DOM.toggleDebugBtn.style.display = 'none'; // Only show when calculations run
+        if (DOM.toggleDebugBtn) {
+            DOM.toggleDebugBtn.classList.remove('active');
+            DOM.toggleDebugBtn.style.display = 'none'; // Only show when calculations run
+        }
         updateStatus('');
         updateBlockMessage(false);
     } else if (stage === 2) {
@@ -89,6 +91,23 @@ export function updateInvolvedLines(debugInfo, rootMode) {
     }
 
     let html = '';
+
+    if (debugInfo.routes_used.length > 0) {
+        html += `
+            <div style="margin-bottom: 12px; display: flex; flex-direction: column; gap: 8px;">
+                <input type="text" id="route-search-input" placeholder="Buscar línea (ej: 15, 60)..." style="width: 100%; padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 13px;">
+                
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <label style="display: flex; align-items: center; cursor: pointer; font-size: 12px; color: #475569;">
+                        <input type="checkbox" id="toggle-markers-checkbox" checked style="accent-color: #2563eb; width: 14px; height: 14px; margin-right: 6px;">
+                        Mostrar Paradas
+                    </label>
+                    
+                    ${debugInfo.routes_used.length > 1 ? `<button id="toggle-all-routes-btn" data-all-checked="true" style="background: none; border: none; color: #2563eb; font-size: 12px; cursor: pointer; padding: 0; text-decoration: underline;">Desmarcar todas</button>` : ''}
+                </div>
+            </div>
+        `;
+    }
     
     // Almacenamos los routesData para referenciarlos al asignar eventos
     globalThis._lastInvolvedRoutes = debugInfo.routes_used;
@@ -96,7 +115,7 @@ export function updateInvolvedLines(debugInfo, rootMode) {
     debugInfo.routes_used.forEach((route, idx) => {
         const color = `hsl(${[0, 210, 120, 280, 45, 180, 320, 15, 250, 75][idx % 10]}, 80%, 45%)`;
         html += `
-            <div style="background: white; border: 1px solid #e2e8f0; border-radius: 4px; padding: 6px; margin-bottom: 8px;">
+            <div class="route-card" data-route-id="${route.route_id}" data-idx="${idx}" style="background: white; border: 1px solid #e2e8f0; border-radius: 4px; padding: 6px; margin-bottom: 8px; transition: border-color 0.2s, box-shadow 0.2s;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
                     <h5 style="margin: 0; font-size: 13px; color: #334155;">🚇 ${route.name}</h5>
                     <label style="display: flex; align-items: center; cursor: pointer;">

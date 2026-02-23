@@ -7,7 +7,7 @@ export async function checkApiStatus() {
             const data = await response.json();
             state.apiStatus.ok = true;
             state.apiStatus.usingMock = !data.api_key_configured;
-            console.log(`[API] Estado: OK. Usando Mock: ${state.apiStatus.usingMock}`);
+            // console.log(`[API] Estado: OK. Usando Mock: ${state.apiStatus.usingMock}`);
             return data;
         }
     } catch (error) {
