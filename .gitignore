@@ -28,3 +28,7 @@ Thumbs.db
 # Cache
 .pytest_cache/
 .mypy_cache/
+
+
+data/colectivos-gtfs/stop_times.txt
+
