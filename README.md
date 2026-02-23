@@ -6,15 +6,30 @@ Herramienta visual que permite ver hasta dónde se puede vivir razonablemente se
 ![Python](https://img.shields.io/badge/python-3.8+-green)
 ![Flask](https://img.shields.io/badge/flask-3.0+-orange)
 
-## ✨ Funcionalidades
+## 📸 Demo de Pantallas
 
-- 🖱️ **Selección por clic en mapa** - Hacé clic directamente en el mapa para seleccionar ubicación
-- 🔍 **Búsqueda por dirección** - Geocodificación de direcciones en CABA
-- 🚗 **Múltiples medios de transporte**: Caminar, Bicicleta, Auto, Transporte Público
-- ⏱️ **Tiempos configurables**: 15, 30, 45, 60 minutos
-- 🎯 **Isócronas visuales** - Áreas alcanzables con colores diferenciados
-- 🚇 **Transporte público** - Visualización de subtes y trenes
-- 🔁 **Anillos concéntricos** - Comparar múltiples tiempos simultáneamente
+**Pantalla Inicial (Búsqueda)**
+![Inicial](inicial.png)
+
+**Resultado Viajando en Auto**
+![Resultado Auto](resultado_auto.png)
+
+**Resultado Viajando en Colectivo**
+![Resultado Colectivos](resultado_colectivos.png)
+
+**Resultado Viajando en Subte**
+![Resultado Subtes](resultado_subtes.png)
+
+
+## ✨ Funcionalidades Principales
+
+- 🖱️ **Flujo de Dos Etapas** - Interfaz dividida en configuración inicial visual y panel de resultados detallado.
+- 🔍 **Búsqueda por dirección** o un simple clic en el mapa (Geocodificación con Proxy de Nominatim).
+- 🚗 **Múltiples medios de transporte**: Caminar, Bicicleta, Auto, Transporte Público (Subte y Colectivos).
+- ⏱️ **Tiempos configurables**: Deslizador interactivo para elegir el tiempo máximo.
+- 🎯 **Isócronas visuales precisas** - Algoritmo propio para transporte público usando datos reales de paradas GTFS.
+- 🚇 **Desglose de Rutas** - Muestra las líneas de transporte utilizadas y permite activarlas o desactivarlas individualmente en el mapa.
+- 🛡️ **Filtros de Interés** - Capas adicionales para ver Comisarías, Hospitales y Zonas de Peligro (Barrios Populares).
 
 ## 🚀 Instalación Rápida
 
@@ -66,42 +81,43 @@ python app.py
 
 La aplicación estará disponible en: **http://localhost:5000**
 
-## 📖 Uso
+## 📖 Guía de Uso
 
-### 🖱️ Opción 1: Hacer clic en el mapa (Más rápido)
-1. **Hacé clic directamente en el mapa** en la ubicación de tu trabajo
-2. El sistema detectará la dirección automáticamente
-3. **Selecciona el medio de transporte** (caminar, bici, auto, público)
-4. **Elige el tiempo máximo** de viaje deseado
-5. Haz clic en **"Generar mapa de alcance"**
+### 🏠 Etapa 1: Configuración
+1. **Seleccioná tu destino (trabajo/estudio)** 
+   - Hacé clic directamente en el mapa de fondo.
+   - O ingresá la dirección en la barra de búsqueda y presiona enter.
+2. **Elegí el medio de transporte** principal (caminar, bici, auto, bus o subte).
+3. **Ajustá el tiempo máximo** de viaje usando el deslizador.
+4. Hacé clic en **"Calcular Zona"**.
 
-### 🔍 Opción 2: Buscar por dirección
-1. **Ingresa la dirección de tu trabajo** en el campo de búsqueda
-2. Haz clic en 🔍 buscar y selecciona la dirección correcta
-3. **Selecciona el medio de transporte** y tiempo
-4. Haz clic en **"Generar mapa de alcance"**
+### 🗺️ Etapa 2: Resultados y Análisis
+1. **Explorá el área calculada**: El mapa se centrará en el área donde puedes vivir.
+2. **Revisá las rutas**: Si elegiste transporte público, en la barra lateral verás un desglose exacto de las líneas involucradas y las paradas alcanzables. Podes usar los checkboxes para encender/apagar el dibujo de su recorrido.
+3. **Aplicá Filtros**: Podes superponer hospitales, comisarías o alertas de zonas peligrosas.
+4. **Modo Debug**: Un botón en la esquina expone los círculos de alcanzabilidad detrás del motor de geometría.
 
-### 📊 Visualiza el área donde podrías vivir
-
-### Opciones adicionales:
-- ✅ **Mostrar anillos concéntricos** - Ver todos los tiempos a la vez
-- ✅ **Mostrar transporte público** - Capa de subtes y trenes
-
-## 🏗️ Arquitectura
+## 🏗️ Arquitectura del Proyecto
 
 ```
 relocate-app/
-├── app.py              # Backend Flask
+├── app.py              # Backend Flask (Rutas, Cálculo de Isócronas GTFS, API Proxy)
 ├── requirements.txt    # Dependencias Python
-├── .env.example        # Configuración de ejemplo
-├── README.md           # Este archivo
+├── data/               # Archivos CSV, JSON y datos GTFS procesados
+├── scripts/            # Scripts ETL para procesamiento offline de datos
 ├── templates/
-│   └── index.html      # Frontend HTML
+│   └── index.html      # Frontend HTML (UI de 2 etapas)
 └── static/
     ├── css/
-    │   └── style.css   # Estilos
+    │   └── style.css   # Estilos, Themes y Responsive Design
     └── js/
-        └── map.js      # Lógica del mapa (Leaflet)
+        ├── main.js      # Orquestador principal y listeners
+        ├── api.js       # Comunicación segura con el backend
+        ├── config.js    # Constantes, configuraciones de color
+        ├── state.js     # Estado centralizado de la aplicación
+        ├── ui.js        # Manipulación DOM y actualizaciones visuales
+        ├── map-core.js  # Base e inicialización de Leaflet
+        └── map-draw.js  # Lógica de dibujo (Turf.js polígonos, isócronas, marcadores)
 ```
 
 ## 🔌 APIs Utilizadas
@@ -132,14 +148,11 @@ relocate-app/
 
 ## 🛠️ Tecnologías
 
-- **Backend**: Python 3.8+, Flask
-- **Frontend**: HTML5, CSS3, Vanilla JavaScript
-- **Mapas**: Leaflet.js + OpenStreetMap
-- **APIs**: OpenRouteService, Nominatim
-
-## 📸 Capturas de Pantalla
-
-*Pendiente - agregar screenshots del MVP*
+- **Backend**: Python 3.8+, Flask, Shapely, Requests
+- **Frontend**: HTML5, CSS3, ES6 Vanilla JavaScript (Modular)
+- **Geometría Espacial**: Turf.js (cliente)
+- **Mapas**: Leaflet.js + CartoDB Positron
+- **APIs**: OpenRouteService, Nominatim Proxy
 
 ## 🤝 Contribuir
 
