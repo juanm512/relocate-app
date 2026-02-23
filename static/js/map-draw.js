@@ -1,7 +1,8 @@
 import { CONFIG, generateLineColor } from './config.js';
-
-// Using globalState to interface with the centralized state store
 import { state as globalState } from './state.js';
+
+// Init map worker for heavy geometry logic
+const mapWorker = new Worker('/static/js/worker.js');
 
 export function getColorForModeAndTime(mode, minutes, alpha = 1) {
     const sConfig = CONFIG.modeColorSchemes[mode] || CONFIG.modeColorSchemes['walking'];
@@ -101,7 +102,9 @@ export function drawTransitCircles(debugInfo, minutes, mode) {
         });
     });
 
-    // Draw clustered Start Stops
+    // -------------------------------------------------------------
+    // Draw clustered Start Stops (Usually small number, synchronous is fine)
+    // -------------------------------------------------------------
     startStops.forEach(stop => {
         const isMulti = stop.lines.length > 1;
         const mainColor = stop.lines[0].color;
@@ -114,65 +117,79 @@ export function drawTransitCircles(debugInfo, minutes, mode) {
             </div>`;
             
         const icon = L.divIcon({ className: '', html, iconAnchor: [14, 14] });
-        const marker = L.marker([stop.lat, stop.lon], { icon, zIndexOffset: 1000 }).addTo(globalState.map);
+        const marker = L.marker([stop.lat, stop.lon], { icon, zIndexOffset: 1000 });
         marker.bindPopup(`<b>Origen: ${stop.name}</b><br><div style="margin-top:4px;">${lineTags}</div>`);
         marker.routeIds = stop.lines.map(l => l.route_id); // Guardamos que lineas usan la parada
         globalState.routeLayers.push(marker);
         createdMarkers.push(marker);
     });
 
-    // Draw clustered Reachable Stops
-    uniqueStops.forEach(stop => {
-        const isMulti = stop.lines.length > 1;
-        // Si hay multiples líneas, la pintamos de un color neutral (gris oscuro). 
-        // Si es una sola, le damos el color de la propia línea para una lectura más rápida visualmente.
-        const mainColor = isMulti ? '#475569' : stop.lines[0].color;
-        const lineTags = stop.lines.map(l => `<span style="background:${l.color};color:white;padding:2px 4px;border-radius:3px;font-size:10px;">${l.name}</span>`).join(' ');
+    // -------------------------------------------------------------
+    // Draw clustered Reachable Stops (Chunked rendering for performance)
+    // -------------------------------------------------------------
+    const stopsArray = Array.from(uniqueStops.values());
+    const chunkSize = 100;
+    let currentIndex = 0;
+
+    function processChunk() {
+        const end = Math.min(currentIndex + chunkSize, stopsArray.length);
+        const markersToAdd = [];
         
-        const html = `
-            <div style="position:relative; width:16px; height:16px; display:flex; align-items:center; justify-content:center; background:${mainColor}; border:2px solid white; border-radius:50%; box-shadow:0 1px 4px rgba(0,0,0,0.4); z-index:500;">
-                ${isMulti ? `<div style="position:absolute; top:-6px; right:-6px; background:white; color:#334155; font-size:8px; width:12px; height:12px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:1px solid #cbd5e1; font-weight:bold;">${stop.lines.length}</div>` : ''}
-            </div>`;
+        for (let i = currentIndex; i < end; i++) {
+            const stop = stopsArray[i];
+            const isMulti = stop.lines.length > 1;
+            const mainColor = isMulti ? '#475569' : stop.lines[0].color;
+            const lineTags = stop.lines.map(l => `<span style="background:${l.color};color:white;padding:2px 4px;border-radius:3px;font-size:10px;">${l.name}</span>`).join(' ');
             
-        const icon = L.divIcon({ className: '', html, iconAnchor: [8, 8] });
-        const marker = L.marker([stop.lat, stop.lon], { icon, zIndexOffset: 500 }).addTo(globalState.map);
-        marker.bindPopup(`<b>Parada: ${stop.name}</b><br><span style="color:#64748b;font-size:11px;">Restan aprox. ${parseFloat(stop.bestTime).toFixed(1)} min</span><br><div style="margin-top:4px;">${lineTags}</div>`);
-        marker.routeIds = stop.lines.map(l => l.route_id); // Guardamos que lineas usan la parada
-        globalState.routeLayers.push(marker);
-        createdMarkers.push(marker);
-    });
-    
-    // Guardar la colección de marcadores generados en el estado global
-    globalState.stopMarkers = createdMarkers;
-    
-    // Add the starting center walk distance as well
-    if (debugInfo.max_walk_distance && globalState.selectedLocation) {
-        const radiusKm = Math.min(debugInfo.max_walk_distance, MAX_STOP_BUFFER_M) / 1000.0;
-        try {
-            const poly = turf.circle([globalState.selectedLocation.lon, globalState.selectedLocation.lat], radiusKm, {steps: 32, units: 'kilometers'});
-            circlePolys.push(poly);
-        } catch(e) { }
-    }
-    
-    if (circlePolys.length === 0) return;
-    
-    // Union the Turf polygons
-    let merged = circlePolys[0];
-    for (let i = 1; i < circlePolys.length; i++) {
-        try {
-            merged = turf.union(merged, circlePolys[i]);
-        } catch(e) {
-            console.warn('turf.union failed on index', i, e);
+            const marker = L.circleMarker([stop.lat, stop.lon], {
+                radius: 6,
+                fillColor: mainColor,
+                color: '#ffffff',
+                weight: 2,
+                opacity: 1,
+                fillOpacity: 1
+            });
+            
+            marker.bindPopup(`<b>Parada: ${stop.name}</b><br><span style="color:#64748b;font-size:11px;">Restan aprox. ${parseFloat(stop.bestTime).toFixed(1)} min</span><br><div style="margin-top:4px;">${lineTags}</div>`);
+            marker.routeIds = stop.lines.map(l => l.route_id);
+            
+            globalState.routeLayers.push(marker);
+            createdMarkers.push(marker);
+            markersToAdd.push(marker);
+        }
+        
+        currentIndex = end;
+        
+        if (currentIndex < stopsArray.length) {
+            requestAnimationFrame(processChunk);
+        } else {
+            // Done mapping markers
+            globalState.stopMarkers = createdMarkers;
         }
     }
     
-    // Smooth the polygon
-    if (merged) {
-        try {
-            merged = turf.buffer(merged, 15/1000.0, { units: 'kilometers' });
-            merged = turf.buffer(merged, -15/1000.0, { units: 'kilometers' });
-        } catch(e) {}
+    // Start cluster chunking
+    if (stopsArray.length > 0) {
+        requestAnimationFrame(processChunk);
+    } else {
+        globalState.stopMarkers = createdMarkers;
+    }
+    
+    // Asynchronous Turf Union execution via Web Worker
+    const payload = {
+        debugInfo: debugInfo,
+        MAX_STOP_BUFFER_M: MAX_STOP_BUFFER_M,
+        centerCoords: globalState.selectedLocation ? { lat: globalState.selectedLocation.lat, lon: globalState.selectedLocation.lon } : null
+    };
+
+    mapWorker.postMessage({ action: 'calculateIsochroneUnion', payload: payload });
+
+    mapWorker.onmessage = function(e) {
+        if (!e.data || !e.data.success) return;
         
+        const merged = e.data.resultGeoJSON;
+        if (!merged) return;
+
         let fillOpacity = mode === 'subte' || mode === 'public_transport' ? 0.35 : 0.25;
         
         // Final unified merged geometry layer
@@ -193,7 +210,7 @@ export function drawTransitCircles(debugInfo, minutes, mode) {
         if (globalState.isochroneLayers.length === 1) {
             globalState.map.fitBounds(unionLayer.getBounds(), { padding: [50, 50] });
         }
-    }
+    };
 }
 
 // Draws the point-to-point route

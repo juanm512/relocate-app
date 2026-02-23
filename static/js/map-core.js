@@ -8,7 +8,8 @@ export function initMap() {
     // Inicializar mapa de Leaflet
     state.map = L.map('map', {
         zoomControl: false,
-        attributionControl: false
+        attributionControl: false,
+        preferCanvas: true // Use HTML Canvas for vectors for high performance
     }).setView(CONFIG.cabaCenter, CONFIG.defaultZoom);
 
     // Controles de zoom abajo a la derecha

@@ -99,7 +99,7 @@ export function updateInvolvedLines(debugInfo, rootMode) {
                 
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <label style="display: flex; align-items: center; cursor: pointer; font-size: 12px; color: #475569;">
-                        <input type="checkbox" id="toggle-markers-checkbox" checked style="accent-color: #2563eb; width: 14px; height: 14px; margin-right: 6px;">
+                        <input type="checkbox" id="toggle-markers-checkbox" style="accent-color: #2563eb; width: 14px; height: 14px; margin-right: 6px;">
                         Mostrar Paradas
                     </label>
                     
