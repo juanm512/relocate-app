@@ -23,206 +23,112 @@
             </div>
             
             <div class="controls">
-                <!-- Input de dirección -->
-                <div class="control-group">
-                    <label for="address">📍 Ubicación del trabajo</label>
-                    <p class="help-text">💡 Hacé clic en el mapa o buscá una dirección</p>
-                    <div class="input-with-button">
-                        <input type="text" id="address" placeholder="Ej: Av. Corrientes 1234, CABA">
-                        <button id="search-btn" class="btn-icon">🔍</button>
-                    </div>
-                    <div id="geocode-results" class="results-list"></div>
-                </div>
                 
-                <!-- Modo de visualización -->
-                <div class="control-group">
-                    <label>👁️ Modo de visualización</label>
-                    <div class="view-modes">
-                        <button class="view-mode-btn active" data-view="single">
-                            <span>1️⃣ Un modo a la vez</span>
-                            <small>Más claro y simple</small>
-                        </button>
-                        <button class="view-mode-btn" data-view="compare">
-                            <span>2️⃣ Comparar modos</span>
-                            <small>Ver diferencias</small>
-                        </button>
-                    </div>
-                </div>
-                
-                <!-- Selector de modo de transporte -->
-                <div class="control-group" id="primary-mode-group">
-                    <label>🚗 Medio de transporte principal</label>
-                    <div class="transport-options" id="transport-modes">
-                        <button class="transport-btn active" data-mode="walking">
-                            <span class="icon">🚶</span>
-                            <span>Caminando</span>
-                        </button>
-                        <button class="transport-btn" data-mode="bike">
-                            <span class="icon">🚲</span>
-                            <span>Bici</span>
-                        </button>
-                        <button class="transport-btn" data-mode="car">
-                            <span class="icon">🚗</span>
-                            <span>Auto</span>
-                        </button>
-                        <button class="transport-btn" data-mode="public_transport">
-                            <span class="icon">🚌</span>
-                            <span>Público</span>
-                        </button>
-                    </div>
-                </div>
-                
-                <!-- Modo secundario (solo en modo comparar) -->
-                <div class="control-group" id="secondary-mode-group" style="display: none;">
-                    <label>🚗 Comparar con (opcional)</label>
-                    <div class="transport-options" id="transport-modes-secondary">
-                        <button class="transport-btn" data-mode="walking">
-                            <span class="icon">🚶</span>
-                            <span>Caminando</span>
-                        </button>
-                        <button class="transport-btn active" data-mode="bike">
-                            <span class="icon">🚲</span>
-                            <span>Bici</span>
-                        </button>
-                        <button class="transport-btn" data-mode="car">
-                            <span class="icon">🚗</span>
-                            <span>Auto</span>
-                        </button>
-                        <button class="transport-btn" data-mode="public_transport">
-                            <span class="icon">🚌</span>
-                            <span>Público</span>
-                        </button>
-                    </div>
-                    <p class="help-text">💡 El modo secundario se muestra solo con contorno</p>
-                </div>
-                
-                <!-- Selector de tiempo -->
-                <div class="control-group">
-                    <label>⏱️ Tiempos <small>(seleccioná preset o agregá custom)</small></label>
-                    <div class="time-options multi-select" id="time-ranges">
-                        <button class="time-btn active" data-minutes="15">
-                            <span class="badge green"></span>
-                            15 min
-                        </button>
-                        <button class="time-btn active" data-minutes="30">
-                            <span class="badge yellow"></span>
-                            30 min
-                        </button>
-                        <button class="time-btn active" data-minutes="45">
-                            <span class="badge orange"></span>
-                            45 min
-                        </button>
-                        <button class="time-btn active" data-minutes="60">
-                            <span class="badge red"></span>
-                            60 min
-                        </button>
+                <!-- ====== STAGE 1: SETUP VIEW ====== -->
+                <div id="setup-view">
+                    <!-- Input de dirección -->
+                    <div class="control-group">
+                        <label for="address">📍 Ubicación del trabajo</label>
+                        <p class="help-text">💡 Hacé clic en el mapa o buscá una dirección</p>
+                        <div class="input-with-button">
+                            <input type="text" id="address" placeholder="Ej: Av. Corrientes 1234, CABA">
+                            <button id="search-btn" class="btn-icon">🔍</button>
+                        </div>
+                        <div id="geocode-results" class="results-list"></div>
                     </div>
                     
-                    <!-- Tiempo personalizado -->
-                    <div class="custom-time-row">
-                        <input type="number" id="custom-time" placeholder="Ej: 20" min="5" max="120" step="5">
-                        <span>minutos</span>
-                        <button id="add-time-btn" class="btn-small">Agregar</button>
+                    <!-- Selector de modo de transporte -->
+                    <div class="control-group" id="primary-mode-group">
+                        <label>🚗 Medio de transporte principal</label>
+                        <div class="transport-options" id="transport-modes">
+                            <button class="transport-btn active" data-mode="walking">
+                                <span class="icon">🚶</span>
+                                <span>Caminando</span>
+                            </button>
+                            <button class="transport-btn" data-mode="bike">
+                                <span class="icon">🚲</span>
+                                <span>Bici</span>
+                            </button>
+                            <button class="transport-btn" data-mode="car">
+                                <span class="icon">🚗</span>
+                                <span>Auto</span>
+                            </button>
+                            <button class="transport-btn" data-mode="public_transport">
+                                <span class="icon">🚌</span>
+                                <span>Colectivos</span>
+                            </button>
+                            <button class="transport-btn" data-mode="subte">
+                                <span class="icon">🚇</span>
+                                <span>Subte</span>
+                            </button>
+                        </div>
                     </div>
-                    <div id="custom-times-list" class="custom-times-list"></div>
+                    <!-- Selector de tiempo (un único slider) -->
+                    <div class="control-group">
+                        <label>⏱️ Tiempo deseado para cálculo</label>
+                        <div class="custom-time-row">
+                            <input type="range" id="time-slider" min="5" max="120" step="5" value="30">
+                            <div style="display:flex; align-items:center; gap:8px; margin-left:8px;">
+                                <span id="time-slider-value">30</span>
+                                <span>min</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Botones de acción -->
+                    <div class="action-buttons">
+                        <button id="generate-btn" class="btn-primary" disabled>
+                            Generar mapa de alcance
+                        </button>
+                    </div>
+                </div>
+
+                <!-- ====== STAGE 2: RESULTS VIEW ====== -->
+                <div id="results-view" style="display: none;">
+                    
+                    <div class="control-group">
+                        <label>⚙️ Filtros del mapa</label>
+                        <div class="filter-options">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="filter-hospitales"> Hospitales
+                            </label>
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="filter-comisarias"> Comisarías
+                            </label>
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="filter-zonas-peligrosas"> Zonas de Peligro
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="control-group" id="minimal-controls">
+                        <label>Visualización Técnica</label>
+                        <div style="display:flex; gap:8px; align-items:center;">
+                            <button id="toggle-debug-btn" class="btn-small">🧪 Mostrar círculos (debug)</button>
+                        </div>
+                    </div>
+
+                    <div class="control-group" id="results-panel">
+                        <label>📝 Resultados y Líneas Involucradas</label>
+                        <div id="involved-lines-container" style="max-height: 250px; overflow-y: auto; background: #f8fafc; padding: 10px; border-radius: 6px; font-size: 0.9em;">
+                            <p style="color: #64748b; font-size: 0.85em;">Los detalles del cálculo aparecerán aquí.</p>
+                        </div>
+                    </div>
+
+                    <!-- Botón para volver al setup -->
+                    <div class="action-buttons" style="margin-top: 20px;">
+                        <button id="reset-btn" class="btn-secondary">
+                            🔄 Nuevo cálculo
+                        </button>
+                    </div>
                 </div>
                 
-                <!-- Opciones de visualización -->
-                <div class="control-group">
-                    <label class="checkbox-label">
-                        <input type="checkbox" id="show-transport-layer" checked>
-                        <span>Mostrar transporte público</span>
-                    </label>
-                    <label class="checkbox-label">
-                        <input type="checkbox" id="debug-mode">
-                        <span>🔧 Ver círculos de cálculo</span>
-                    </label>
-                    <label class="checkbox-label">
-                        <input type="checkbox" id="show-hull-only" checked>
-                        <span>Mostrar solo envolvente (sin círculos)</span>
-                    </label>
-                </div>
-                
-                <!-- Servicios y seguridad -->
-                <div class="control-group">
-                    <label>🏥 Servicios y seguridad</label>
-                    <label class="checkbox-label">
-                        <input type="checkbox" id="show-hospitales">
-                        <span>🏥 Hospitales</span>
-                    </label>
-                    <label class="checkbox-label">
-                        <input type="checkbox" id="show-comisarias">
-                        <span>👮 Comisarías</span>
-                    </label>
-                    <label class="checkbox-label">
-                        <input type="checkbox" id="show-barrios">
-                        <span>⚠️ Zonas de precaución</span>
-                    </label>
-                    <label class="checkbox-label">
-                        <input type="checkbox" id="show-colectivos">
-                        <span>🚌 Paradas de colectivo</span>
-                    </label>
-                    <label class="checkbox-label">
-                        <input type="checkbox" id="show-colectivos-recorridos">
-                        <span>🛣️ Recorridos de colectivo</span>
-                    </label>
-                </div>
-                
-                <!-- Botones de acción -->
-                <div class="action-buttons">
-                    <button id="generate-btn" class="btn-primary" disabled>
-                        Generar mapa de alcance
-                    </button>
-                    <button id="reset-btn" class="btn-secondary" style="display: none;">
-                        🔄 Nuevo cálculo
-                    </button>
-                </div>
-                
-                <!-- Estado -->
+                <!-- Estado Universal -->
                 <div id="status" class="status"></div>
                 
                 <!-- Mensaje de bloqueo -->
                 <div id="block-message" class="block-message" style="display: none;">
-                    ⚠️ Tenés resultados cargados. <strong>Hacé clic en cualquier punto del mapa</strong> para ver la ruta desde tu trabajo, o en "Nuevo cálculo" para cambiar la ubicación.
-                </div>
-            </div>
-            
-            <!-- Leyenda por modo de transporte -->
-            <div class="legend">
-                <h4>📊 Degradé por tiempo</h4>
-                <p class="legend-help">5 min ← → 60+ min</p>
-                
-                <div class="legend-mode">
-                    <div class="legend-mode-header">
-                        <span>🚶</span>
-                        <span>Caminando</span>
-                        <span class="legend-gradient walking"></span>
-                    </div>
-                    <small>Casi transparente → Verde intenso</small>
-                </div>
-                <div class="legend-mode">
-                    <div class="legend-mode-header">
-                        <span>🚲</span>
-                        <span>Bici</span>
-                        <span class="legend-gradient bike"></span>
-                    </div>
-                    <small>Casi transparente → Azul intenso</small>
-                </div>
-                <div class="legend-mode">
-                    <div class="legend-mode-header">
-                        <span>🚗</span>
-                        <span>Auto</span>
-                        <span class="legend-gradient car"></span>
-                    </div>
-                    <small>Casi transparente → Rojo intenso</small>
-                </div>
-                <div class="legend-mode">
-                    <div class="legend-mode-header">
-                        <span>🚌</span>
-                        <span>Transporte</span>
-                        <span class="legend-gradient transport"></span>
-                    </div>
-                    <small>Casi transparente → Violeta intenso</small>
+                    ⚠️ Tenés resultados cargados. <strong>Hacé clic en cualquier punto del área verde</strong> para ver la ruta desde tu trabajo, o en "Nuevo cálculo" para cambiar la ubicación.
                 </div>
             </div>
             
@@ -237,15 +143,6 @@
         <main class="map-container">
             <div id="map"></div>
             
-            <!-- Panel de capas -->
-            <div id="layers-panel" class="layers-panel" style="display: none;">
-                <div class="layers-header">
-                    <h3>🗂️ Capas</h3>
-                    <button id="toggle-all-layers" class="btn-small">Mostrar/Ocultar todo</button>
-                </div>
-                <div id="layers-list" class="layers-list"></div>
-            </div>
-            
             <!-- Overlay de carga -->
             <div id="loading" class="loading-overlay" style="display: none;">
                 <div class="spinner"></div>
@@ -256,6 +153,10 @@
     
     <!-- Leaflet JS -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="{{ url_for('static', filename='js/map.js') }}"></script>
+    <!-- Turf.js for geometric operations (union, buffer, point-in-polygon) -->
+    <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
+    
+    <!-- Main App Module -->
+    <script type="module" src="{{ url_for('static', filename='js/main.js') }}"></script>
 </body>
 </html>

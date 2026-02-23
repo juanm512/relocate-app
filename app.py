@@ -31,7 +31,8 @@ TRANSPORT_MODES = {
     'walking': 'foot-walking',
     'bike': 'cycling-regular',
     'car': 'driving-car',
-    'public_transport': 'foot-walking'  # MVP: usamos walking como aproximación
+    'public_transport': 'foot-walking',  # MVP: usamos walking como aproximación
+    'subte': 'foot-walking'  # manejado por generate_transit_isochrone
 }
 
 # Colores para los tiempos (hex con transparencia)
@@ -41,6 +42,9 @@ ISOCHRONE_COLORS = {
     45: '#f97316',   # Naranja
     60: '#ef4444'    # Rojo
 }
+
+# Velocidad por defecto si falta tiempo por arista (m/s)
+BUS_SPEED_FALLBACK = 8.0
 
 
 def get_cache_key(lat, lon, mode, minutes):
@@ -125,6 +129,34 @@ def geocode():
     except requests.RequestException as e:
         return jsonify({'error': f'Error de geocodificación: {str(e)}'}), 500
 
+@app.route('/api/reverse')
+def reverse_geocode():
+    """Proxy para Nominatim reverse geocode"""
+    lat = request.args.get('lat')
+    lon = request.args.get('lon')
+    
+    if not lat or not lon:
+        return jsonify({'error': 'Latitud y longitud requeridas'}), 400
+        
+    try:
+        response = requests.get(
+            'https://nominatim.openstreetmap.org/reverse',
+            params={
+                'format': 'json',
+                'lat': lat,
+                'lon': lon,
+                'zoom': 18,
+                'addressdetails': 1
+            },
+            headers={'User-Agent': 'RelocateApp/1.0'},
+            timeout=10
+        )
+        response.raise_for_status()
+        data = response.json()
+        return jsonify({'display_name': data.get('display_name', '')})
+    except requests.RequestException as e:
+        return jsonify({'error': f'Error de reverse geocodificación: {str(e)}'}), 500
+
 
 @app.route('/api/isochrone', methods=['POST'])
 def get_isochrone():
@@ -174,13 +206,24 @@ def get_isochrone():
     
     # Para transporte público, SIEMPRE usar nuestro cálculo (la API no lo soporta)
     if mode == 'public_transport':
-        print(f'[API] Modo transporte público - usando cálculo propio', flush=True)
-        isochrone = generate_transit_isochrone(float(lat), float(lon), minutes)
-        print(f'[API] Transporte público generado. Tiene debug_info: {"debug_info" in isochrone.get("properties", {})}', flush=True)
+        print(f'[API] Modo transporte público - usando cálculo propio (colectivos)', flush=True)
+        isochrone = generate_bus_isochrone(float(lat), float(lon), minutes)
+        print(f'[API] Transporte público (colectivos) generado. Tiene debug_info: {"debug_info" in isochrone.get("properties", {})}', flush=True)
         return jsonify({
             'isochrone': isochrone,
             'demo': True,
             'message': 'Usando cálculo de transporte público con paradas reales'
+        })
+
+    # Para Subte, usar nuestro cálculo específico de tránsito (subte)
+    if mode == 'subte':
+        print(f'[API] Modo Subte - usando cálculo propio (subte)', flush=True)
+        isochrone = generate_transit_isochrone(float(lat), float(lon), minutes)
+        print(f'[API] Subte generado. Tiene debug_info: {"debug_info" in isochrone.get("properties", {})}', flush=True)
+        return jsonify({
+            'isochrone': isochrone,
+            'demo': True,
+            'message': 'Usando cálculo de Subte con estaciones reales'
         })
     
     # Para otros modos, usar API si está disponible
@@ -446,6 +489,36 @@ def generate_mock_isochrone(lat, lon, mode, minutes):
     
     return create_geojson_feature(points, mode, minutes)
 
+_shapes_cache = {}
+def get_shape_polyline(shape_id):
+    import csv
+    if not _shapes_cache:
+        shapes_path = os.path.join(os.path.dirname(__file__), 'data', 'colectivos-gtfs', 'shapes.txt')
+        if os.path.exists(shapes_path):
+            try:
+                with open(shapes_path, 'r', encoding='utf-8') as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        sid = row['shape_id']
+                        if sid not in _shapes_cache:
+                            _shapes_cache[sid] = []
+                        _shapes_cache[sid].append({
+                            'lat': float(row['shape_pt_lat']),
+                            'lon': float(row['shape_pt_lon']),
+                            'seq': int(row['shape_pt_sequence'])
+                        })
+                for sid in _shapes_cache:
+                    _shapes_cache[sid].sort(key=lambda x: x['seq'])
+                    _shapes_cache[sid] = [[p['lat'], p['lon']] for p in _shapes_cache[sid]]
+            except Exception as e:
+                print(f"[SERVER] Error loading shape cache: {e}", flush=True)
+    
+    polyline = _shapes_cache.get(shape_id, [])
+    # Simplify polyline slightly to save bandwidth (take every 3rd point)
+    if len(polyline) > 20:
+        return [polyline[i] for i in range(0, len(polyline), 3)]
+    return polyline
+
 
 def generate_transit_isochrone(lat, lon, minutes):
     """
@@ -518,9 +591,11 @@ def generate_transit_isochrone(lat, lon, minutes):
         
         route_debug = {
             'name': route['name'],
+            'route_id': route_id,
             'closest_stop': closest_stop['name'],
             'walk_time_to_stop': round(walk_time_to_closest, 1),
-            'stops_reached': []
+            'stops_reached': [],
+            'polyline': [[s['lat'], s['lon']] for s in stops]
         }
         
         print(f"[SERVER] Ruta {route['name']}: parada más cercana {closest_stop['name']} a {walk_time_to_closest}min", flush=True)
@@ -618,6 +693,178 @@ def generate_transit_isochrone(lat, lon, minutes):
     # El frontend usará los círculos individuales del debug_info
     simple_geometry = create_circle_geometry([center_lon, center_lat], debug_info.get('max_walk_distance', 1000))
     
+    return create_geojson_feature(simple_geometry, 'public_transport', minutes, debug_info)
+
+
+def generate_bus_isochrone(lat, lon, minutes):
+    """
+    Genera isócrona simple usando datos de colectivos (adjacency_by_route.txt y stops.txt).
+    Sigue la misma idea que generate_transit_isochrone pero usando recorridos de colectivos (direccional).
+    """
+    print(f"\n[SERVER] ===== generate_bus_isochrone INICIADO =====", flush=True)
+    base = os.path.join(os.path.dirname(__file__), 'data', 'colectivos-gtfs')
+    adj_path = os.path.join(base, 'adjacency_by_route.txt')
+    stops_path = os.path.join(base, 'stops.txt')
+
+    # parámetros hardcodeados (como pediste)
+    WALK_SPEED = 80  # m/min (~4.8 km/h)
+    BOARD_TIME = 0   # ya contabilizado fuera; mantenemos 0 para simplificar
+
+    MAX_WALK_TO_STATION = minutes * 0.70
+    MAX_WALK_DISTANCE = MAX_WALK_TO_STATION * WALK_SPEED
+
+    import csv
+
+    # Cargar adjacency
+    shape_map = {}
+    try:
+        with open(adj_path, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                route = row.get('route_id')
+                shape = row.get('shape_id')
+                stop = row.get('stop_id')
+                next_stop = row.get('next_stop_id')
+                tt = row.get('travel_time_to_next')
+                td = row.get('travel_distance_to_next')
+                try:
+                    tt_s = int(tt) if tt not in (None, '') else None
+                except Exception:
+                    tt_s = None
+                try:
+                    td_m = float(td) if td not in (None, '') else None
+                except Exception:
+                    td_m = None
+                key = (route, shape)
+                if key not in shape_map:
+                    shape_map[key] = {}
+                shape_map[key][stop] = (next_stop, tt_s, td_m)
+    except Exception as e:
+        print(f'[SERVER] Error leyendo adjacency: {e}', flush=True)
+
+    # Cargar stops
+    stops = {}
+    try:
+        with open(stops_path, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                sid = row.get('stop_id')
+                try:
+                    latv = float(row.get('stop_lat'))
+                    lonv = float(row.get('stop_lon'))
+                except Exception:
+                    latv = lonv = None
+                stops[sid] = {'lat': latv, 'lon': lonv, 'row': row}
+    except Exception as e:
+        print(f'[SERVER] Error leyendo stops: {e}', flush=True)
+
+    center_lat, center_lon = lat, lon
+    all_reachable_points = []
+    debug_info = {'routes_used': [], 'total_time': minutes, 'max_walk_distance': MAX_WALK_DISTANCE}
+
+    # círculo inicial
+    for angle_deg in range(0, 360, 15):
+        angle = radians(angle_deg)
+        walk_lat = center_lat + (MAX_WALK_DISTANCE / 111000) * cos(angle)
+        walk_lon = center_lon + (MAX_WALK_DISTANCE / (111000 * abs(cos(radians(center_lat))))) * sin(angle)
+        all_reachable_points.append([walk_lon, walk_lat])
+
+    # Para cada (route,shape) encontrar la parada más cercana al trabajo
+    for (route, shape), stops_map in shape_map.items():
+        closest = None
+        min_d = float('inf')
+        for sid in stops_map.keys():
+            s = stops.get(sid)
+            if not s or s['lat'] is None:
+                continue
+            lat2, lon2 = s['lat'], s['lon']
+            dx = (lat2 - center_lat) * 111000
+            dy = (lon2 - center_lon) * 111000 * abs(cos(radians(center_lat)))
+            d = (dx*dx + dy*dy)**0.5
+            if d < min_d:
+                min_d = d
+                closest = sid
+
+        if closest is None:
+            continue
+
+        walk_time = min_d / WALK_SPEED
+        if walk_time > MAX_WALK_TO_STATION:
+            continue
+
+        time_after_board = minutes - walk_time - (BOARD_TIME / 60.0)
+        if time_after_board <= 0:
+            continue
+
+        # Nombre legible para debug (usar route|shape)
+        route_debug = {
+            'name': f'{route} {shape}', 
+            'route_id': route, 
+            'shape_id': shape, 
+            'closest_stop': closest, 
+            'walk_time_min': round(walk_time,2), 
+            'stops_reached': [],
+            'polyline': get_shape_polyline(shape)
+        }
+
+        # recorrer hacia adelante (direccional)
+        cur = closest
+        acc_min = 0.0
+        while cur:
+            entry = shape_map.get((route, shape), {}).get(cur)
+            if not entry:
+                break
+            next_stop, tt_s, td_m = entry
+            # time used in minutes
+            dt_min = (tt_s / 60.0) if tt_s is not None else ((td_m / 1.0) / (BUS_SPEED_FALLBACK*60.0) if td_m is not None else None)
+            if dt_min is None:
+                break
+            acc_min += dt_min
+            total_used = walk_time + acc_min
+            if total_used < minutes:
+                time_remaining = minutes - total_used
+                walk_radius = time_remaining * WALK_SPEED
+                s = stops.get(cur)
+                # Nombre de la parada si existe en csv
+                stop_name = None
+                try:
+                    stop_name = s['row'].get('stop_name') if s and s.get('row') else None
+                except Exception:
+                    stop_name = None
+
+                stop_debug = {
+                    'stop_id': cur,
+                    'name': stop_name or str(cur),
+                    'lat': s['lat'] if s else None,
+                    'lon': s['lon'] if s else None,
+                    'time_spent': round(total_used, 2),
+                    'time_remaining': round(time_remaining, 2),
+                    'walk_radius_meters': round(walk_radius, 1)
+                }
+                route_debug['stops_reached'].append(stop_debug)
+                # add circle points
+                for angle_deg in range(0, 360, 20):
+                    a = radians(angle_deg)
+                    if s and s['lat'] is not None:
+                        walk_lat = s['lat'] + (walk_radius / 111000) * cos(a)
+                        walk_lon = s['lon'] + (walk_radius / (111000 * abs(cos(radians(s['lat']))))) * sin(a)
+                        all_reachable_points.append([walk_lon, walk_lat])
+            else:
+                break
+            cur = next_stop
+
+        debug_info['routes_used'].append(route_debug)
+
+    # crear polígono envolvente similar a transit
+    def angle_from_center(point):
+        return atan2(point[1] - center_lat, point[0] - center_lon)
+
+    if all_reachable_points and len(all_reachable_points) > 0:
+        all_reachable_points.sort(key=angle_from_center)
+        if all_reachable_points[0] != all_reachable_points[-1]:
+            all_reachable_points.append(all_reachable_points[0])
+
+    simple_geometry = create_circle_geometry([center_lon, center_lat], debug_info.get('max_walk_distance', 1000))
     return create_geojson_feature(simple_geometry, 'public_transport', minutes, debug_info)
 
 
@@ -1205,12 +1452,8 @@ def load_colectivos_caba():
         import csv
         import random
         
-        # Límites aproximados de CABA
-        min_lat, max_lat = -34.75, -34.52
-        min_lon, max_lon = -58.53, -58.33
-        
-        # Primero recolectar todas las paradas de CABA
-        paradas_caba = []
+        # Cargar todas las paradas (sin filtrar por bbox CABA)
+        paradas_all = []
         
         with open(stops_path, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
@@ -1218,24 +1461,19 @@ def load_colectivos_caba():
                 try:
                     lat = float(row.get('stop_lat', 0))
                     lon = float(row.get('stop_lon', 0))
-                    
-                    # Filtrar solo paradas dentro de CABA
-                    if min_lat <= lat <= max_lat and min_lon <= lon <= max_lon:
-                        paradas_caba.append({
-                            'name': row.get('stop_name', ''),
-                            'lat': lat,
-                            'lon': lon
-                        })
+                    paradas_all.append({
+                        'name': row.get('stop_name', ''),
+                        'lat': lat,
+                        'lon': lon
+                    })
                 except:
                     continue
-        
-        # Limitar a 500 paradas aleatorias para no sobrecargar
-        if len(paradas_caba) > 500:
-            paradas = random.sample(paradas_caba, 500)
+        # Limitar a 500 paradas aleatorias para no sobrecargar (sin filtrar por bbox)
+        if len(paradas_all) > 500:
+            paradas = random.sample(paradas_all, 500)
         else:
-            paradas = paradas_caba
-            
-        print(f'[DATA] Colectivos: {len(paradas_caba)} en CABA, mostrando {len(paradas)}', flush=True)
+            paradas = paradas_all
+        print(f'[DATA] Colectivos: {len(paradas_all)} en total, mostrando {len(paradas)}', flush=True)
                     
     except Exception as e:
         print(f'[DATA] Error cargando colectivos: {e}', flush=True)
@@ -1244,23 +1482,16 @@ def load_colectivos_caba():
 
 
 def load_colectivos_recorridos():
-    """Carga recorridos de colectivos que pasan por CABA"""
+    """Carga recorridos de colectivos desde GTFS (sin filtrar por bbox CABA)"""
     import csv
     import os
-    
+
     base_path = os.path.join(os.path.dirname(__file__), 'data', 'colectivos-gtfs')
-    
-    # Límites de CABA
-    min_lat, max_lat = -34.75, -34.52
-    min_lon, max_lon = -58.53, -58.33
-    
-    def is_in_caba(lat, lon):
-        return min_lat <= lat <= max_lat and min_lon <= lon <= max_lon
-    
-    # 1. Cargar shapes y filtrar las que pasan por CABA
+
+    # 1. Cargar shapes (sin filtrar por bbox)
     print('[DATA] Cargando shapes...', flush=True)
-    shapes = {}  # shape_id -> {points: [{lat, lon, sequence}], pasa_caba: bool}
-    
+    shapes = {}  # shape_id -> {points: [{lat, lon, sequence}]}
+
     shapes_path = os.path.join(base_path, 'shapes.txt')
     if os.path.exists(shapes_path):
         try:
@@ -1272,26 +1503,20 @@ def load_colectivos_recorridos():
                         lat = float(row['shape_pt_lat'])
                         lon = float(row['shape_pt_lon'])
                         sequence = int(row['shape_pt_sequence'])
-                        
+
                         if shape_id not in shapes:
-                            shapes[shape_id] = {'points': [], 'pasa_caba': False}
-                        
+                            shapes[shape_id] = {'points': []}
+
                         shapes[shape_id]['points'].append({
                             'lat': lat,
                             'lon': lon,
                             'sequence': sequence
                         })
-                        
-                        if is_in_caba(lat, lon):
-                            shapes[shape_id]['pasa_caba'] = True
                     except:
                         continue
         except Exception as e:
             print(f'[DATA] Error cargando shapes: {e}', flush=True)
-    
-    # Filtrar solo shapes que pasan por CABA
-    shapes_caba = {k: v for k, v in shapes.items() if v['pasa_caba']}
-    print(f'[DATA] Shapes que pasan por CABA: {len(shapes_caba)}', flush=True)
+    print(f'[DATA] Shapes cargados: {len(shapes)}', flush=True)
     
     # 2. Cargar trips para relacionar route_id con shape_id
     print('[DATA] Cargando trips...', flush=True)
@@ -1306,8 +1531,9 @@ def load_colectivos_recorridos():
                     try:
                         route_id = row['route_id']
                         shape_id = row['shape_id']
-                        
-                        if shape_id in shapes_caba:
+
+                        # include mapping if shape exists (no bbox filtering)
+                        if shape_id in shapes:
                             if route_id not in route_to_shapes:
                                 route_to_shapes[route_id] = set()
                             route_to_shapes[route_id].add(shape_id)
@@ -1315,8 +1541,8 @@ def load_colectivos_recorridos():
                         continue
         except Exception as e:
             print(f'[DATA] Error cargando trips: {e}', flush=True)
-    
-    print(f'[DATA] Routes con shapes en CABA: {len(route_to_shapes)}', flush=True)
+
+    print(f'[DATA] Routes con shapes identificadas: {len(route_to_shapes)}', flush=True)
     
     # 3. Cargar routes para obtener nombres de líneas
     print('[DATA] Cargando routes...', flush=True)
@@ -1340,11 +1566,11 @@ def load_colectivos_recorridos():
         except Exception as e:
             print(f'[DATA] Error cargando routes: {e}', flush=True)
     
-    print(f'[DATA] Routes identificadas en CABA: {len(routes_info)}', flush=True)
+    print(f'[DATA] Routes identificadas: {len(routes_info)}', flush=True)
     
     # 4. Construir recorridos finales (limitar para no sobrecargar)
     recorridos = []
-    max_recorridos = 100  # Limitar para performance
+    max_recorridos = 10000  # Limitar para performance
     
     for route_id, info in routes_info.items():
         if len(recorridos) >= max_recorridos:
@@ -1356,7 +1582,7 @@ def load_colectivos_recorridos():
             
         # Tomar el primer shape (podría haber variantes)
         shape_id = list(shape_ids)[0]
-        shape_data = shapes_caba.get(shape_id)
+        shape_data = shapes.get(shape_id)
         
         if not shape_data:
             continue
@@ -1375,10 +1601,89 @@ def load_colectivos_recorridos():
                 'route_id': route_id,
                 'linea': info['nombre'],
                 'descripcion': info['descripcion'],
-                'polyline': simplified
+                'polyline': simplified,
+                'shape_id': shape_id
             })
     
     print(f'[DATA] Recorridos finales para mostrar: {len(recorridos)}', flush=True)
+    # 5. Intentar mapear paradas por recorrido usando adjacency_by_route.txt + stops.txt
+    try:
+        stops_path = os.path.join(base_path, 'stops.txt')
+        stop_lookup = {}  # stop_id -> {name, lat, lon}
+        if os.path.exists(stops_path):
+            with open(stops_path, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    sid = row.get('stop_id')
+                    try:
+                        lat = float(row.get('stop_lat', 0))
+                        lon = float(row.get('stop_lon', 0))
+                    except:
+                        continue
+                    stop_lookup[str(sid).strip()] = {
+                        'name': row.get('stop_name', ''),
+                        'lat': lat,
+                        'lon': lon
+                    }
+
+        adj_path = os.path.join(base_path, 'adjacency_by_route.txt')
+        if os.path.exists(adj_path):
+            # Build adjacency per (route_id, shape_id)
+            adj = {}  # (route,shape) -> {stop_id: next_stop_id}
+            with open(adj_path, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    r = str(row.get('route_id'))
+                    s = str(row.get('shape_id'))
+                    key = (r, s)
+                    sid = str(row.get('stop_id'))
+                    next_sid = row.get('next_stop_id')
+                    if key not in adj:
+                        adj[key] = {}
+                    adj[key][sid] = str(next_sid) if next_sid else None
+
+                # For each recorrido, try to assemble stops sequence
+            for rec in recorridos:
+                key = (str(rec.get('route_id')), str(rec.get('shape_id')))
+                seq = []
+                if key in adj:
+                    mapping = adj[key]
+                    # find potential start: a stop_id that is not any next_stop_id
+                    nexts = set(v for v in mapping.values() if v and v != '')
+                    starts = [sid for sid in mapping.keys() if sid not in nexts]
+                    start = starts[0] if starts else None
+                    # fallback: lowest numeric stop id
+                    if not start and mapping:
+                        try:
+                            start = sorted(mapping.keys(), key=lambda x: int(x))[0]
+                        except:
+                            start = list(mapping.keys())[0]
+
+                    # walk the chain
+                    seen = set()
+                    cur = start
+                    while cur and cur not in seen:
+                        seen.add(cur)
+                        info_stop = stop_lookup.get(cur)
+                        if info_stop:
+                            # Include stop regardless of bbox
+                            seq.append({
+                                'stop_id': cur,
+                                'name': info_stop.get('name', ''),
+                                'lat': info_stop['lat'],
+                                'lon': info_stop['lon']
+                            })
+                        # move to next
+                        nxt = mapping.get(cur)
+                        if not nxt or nxt == '' or nxt == cur:
+                            break
+                        cur = nxt
+
+                # attach stops (may be empty)
+                rec['stops'] = seq
+    except Exception as e:
+        print(f'[DATA] Error mapeando paradas por recorrido: {e}', flush=True)
+
     return recorridos
 
 
@@ -1410,7 +1715,7 @@ def get_colectivos():
     return jsonify({
         'count': len(paradas), 
         'paradas': paradas,
-        'note': 'Muestra paradas filtradas dentro de CABA (máx 500)'
+        'note': 'Muestra paradas (máx 500)'
     })
 
 
@@ -1421,7 +1726,7 @@ def get_colectivos_recorridos():
     return jsonify({
         'count': len(recorridos),
         'recorridos': recorridos,
-        'note': 'Recorridos de colectivos filtrados a CABA (máx 100 líneas)'
+        'note': 'Recorridos de colectivos (máx 100 líneas)'
     })
 
 

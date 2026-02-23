@@ -43,6 +43,15 @@ const CONFIG = {
             weight: 3,
             icon: '🚌'
         }
+        ,
+        'subte': {
+            hue: 45,  // Amarillo
+            saturation: 80,
+            label: 'Subte',
+            dashArray: '6, 4',
+            weight: 3,
+            icon: '🚇'
+        }
     },
     
     // Para cálculo de colores por tiempo
@@ -71,25 +80,29 @@ const state = {
     debugLayers: [],  // Capas de debug (círculos, markers)
     transportLayers: {},
     selectedLocation: null,
-    viewMode: 'single',
     primaryMode: 'walking',
-    secondaryMode: 'bike',
-    selectedTimes: [15, 30, 45, 60],
-    customTimes: [],
-    showTransport: true,
-    debugMode: false,
+    selectedTime: 30,
     isLoading: false,
     hasResults: false,
     routeLayers: [],  // Capas de rutas dibujadas
     activeRouteMode: 'walking'  // Modo usado para calcular rutas
 };
 
+// Mapeo de líneas de colectivo: { lineaId: { polyline, markers: [L.Marker], group: L.LayerGroup } }
+state.colectivoLines = {};
+
+// Genera un color HSL para una línea según índice (retorna string CSS)
+function generateLineColor(idx) {
+    const hue = (idx * 47) % 360; // distribuir tonos
+    const sat = 75;
+    const light = 45;
+    return `hsl(${hue}, ${sat}%, ${light}%)`;
+}
+
 // ===== Inicialización =====
 document.addEventListener('DOMContentLoaded', () => {
     initMap();
     initEventListeners();
-    loadTransportLines();
-    loadServicesLayers();
     checkApiStatus();
 });
 
@@ -110,13 +123,7 @@ function initMap() {
         maxZoom: 19
     }).addTo(state.map);
     
-    // Limitar vista a CABA aproximadamente
-    const cabaBounds = L.latLngBounds(
-        [-34.75, -58.53],
-        [-34.52, -58.33]
-    );
-    state.map.setMaxBounds(cabaBounds);
-    state.map.fitBounds(cabaBounds);
+    // Do not limit view to CABA; allow whole world navigation
     
     // Event listener para clic en el mapa
     state.map.on('click', handleMapClick);
@@ -140,19 +147,13 @@ function initMap() {
 function handleMapClick(e) {
     const { lat, lng } = e.latlng;
     
-    // Verificar si está dentro de CABA aproximadamente
-    if (lat < -34.75 || lat > -34.52 || lng < -58.53 || lng > -58.33) {
-        showStatus('Por favor seleccioná una ubicación dentro de CABA', 'error');
-        return;
-    }
-    
-    // Si hay resultados, calcular ruta al punto clickeado
+    // Si ya hay resultados, no permitir cambiar el marcador ni calcular rutas
     if (state.hasResults) {
-        calculateRouteToPoint(lat, lng);
+        showStatus('Tenés resultados activos. Presioná "Nuevo cálculo" para cambiar la ubicación.', 'error');
         return;
     }
-    
-    // Colocar marcador
+
+    // Colocar marcador (solo si no hay resultados activos)
     placeWorkMarker(lat, lng);
     
     // Actualizar estado
@@ -208,213 +209,67 @@ async function reverseGeocode(lat, lng) {
 function initEventListeners() {
     // Botón de búsqueda
     document.getElementById('search-btn').addEventListener('click', handleSearch);
-    
+
     // Enter en input de dirección
     document.getElementById('address').addEventListener('keypress', (e) => {
         if (e.key === 'Enter') handleSearch();
     });
-    
-    // Botones de modo de visualización
-    document.querySelectorAll('.view-mode-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            document.querySelectorAll('.view-mode-btn').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            state.viewMode = btn.dataset.view;
-            toggleViewMode();
-        });
-    });
-    
+
     // Botones de modo primario
     document.querySelectorAll('#transport-modes .transport-btn').forEach(btn => {
         btn.addEventListener('click', () => {
             document.querySelectorAll('#transport-modes .transport-btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
             state.primaryMode = btn.dataset.mode;
-            // Si estamos en modo compare y es el mismo que secundario, cambiar secundario
-            if (state.viewMode === 'compare' && state.primaryMode === state.secondaryMode) {
-                const modes = ['walking', 'bike', 'car', 'public_transport'];
-                state.secondaryMode = modes.find(m => m !== state.primaryMode);
-                updateSecondaryModeButtons();
-            }
         });
     });
-    
-    // Botones de modo secundario
-    document.querySelectorAll('#transport-modes-secondary .transport-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const mode = btn.dataset.mode;
-            if (mode === state.primaryMode) {
-                showStatus('El modo secundario debe ser diferente al primario', 'error');
-                return;
-            }
-            document.querySelectorAll('#transport-modes-secondary .transport-btn').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            state.secondaryMode = mode;
-        });
-    });
-    
-    // Botones de tiempo
-    document.querySelectorAll('.time-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const minutes = parseInt(btn.dataset.minutes);
-            
-            if (btn.classList.contains('active')) {
-                if (state.selectedTimes.length > 1) {
-                    btn.classList.remove('active');
-                    state.selectedTimes = state.selectedTimes.filter(t => t !== minutes);
-                }
-            } else {
-                btn.classList.add('active');
-                state.selectedTimes.push(minutes);
-                state.selectedTimes.sort((a, b) => a - b);
-            }
-            
+
+    // Slider de tiempo (único)
+    const slider = document.getElementById('time-slider');
+    const sliderValue = document.getElementById('time-slider-value');
+    if (slider) {
+        const updateSliderUI = (val) => {
+            const min = parseInt(slider.min);
+            const max = parseInt(slider.max);
+            const pct = Math.round(((val - min) / (max - min)) * 100);
+            slider.style.background = `linear-gradient(90deg, var(--primary) ${pct}%, #e5e7eb ${pct}%)`;
+            state.selectedTime = val;
+            if (sliderValue) sliderValue.textContent = val;
             updateGenerateButton();
+        };
+
+        // Initialize
+        updateSliderUI(parseInt(slider.value));
+
+        slider.addEventListener('input', (e) => {
+            updateSliderUI(parseInt(e.target.value));
         });
-    });
-    
-    // Checkbox de transporte público
-    document.getElementById('show-transport-layer').addEventListener('change', (e) => {
-        state.showTransport = e.target.checked;
-        toggleTransportLayer();
-    });
-    
-    // Checkbox de modo debug (ver círculos)
-    document.getElementById('debug-mode').addEventListener('change', (e) => {
-        state.debugMode = e.target.checked;
-        console.log('Modo círculos:', state.debugMode ? 'ACTIVADO' : 'DESACTIVADO');
-        if (state.hasResults) {
-            toggleDebugVisibility();
-        }
-    });
-    
-    // Checkboxes de servicios y seguridad
-    document.getElementById('show-hospitales').addEventListener('change', (e) => {
-        toggleServicesLayer('hospitales', e.target.checked);
-    });
-    
-    document.getElementById('show-comisarias').addEventListener('change', (e) => {
-        toggleServicesLayer('comisarias', e.target.checked);
-    });
-    
-    document.getElementById('show-barrios').addEventListener('change', (e) => {
-        toggleServicesLayer('barrios', e.target.checked);
-    });
-    
-    document.getElementById('show-colectivos').addEventListener('change', (e) => {
-        toggleServicesLayer('colectivos', e.target.checked);
-    });
-    
-    document.getElementById('show-colectivos-recorridos').addEventListener('change', (e) => {
-        toggleServicesLayer('colectivosRecorridos', e.target.checked);
-    });
-    
-    // Checkbox de mostrar solo envolvente
-    document.getElementById('show-hull-only').addEventListener('change', (e) => {
-        if (state.hasResults) {
-            toggleDebugVisibility();
-        }
-    });
-    
+    }
+
+    // Debug toggle button (hidden until after a calculation)
+    const debugBtn = document.getElementById('toggle-debug-btn');
+    if (debugBtn) {
+        debugBtn.addEventListener('click', () => toggleDebugVisibility());
+    }
+
     // Botón generar
     document.getElementById('generate-btn').addEventListener('click', generateIsochrones);
-    
+
     // Botón reset
     document.getElementById('reset-btn').addEventListener('click', resetCalculation);
-    
-    // Tiempo personalizado
-    document.getElementById('add-time-btn').addEventListener('click', addCustomTime);
-    document.getElementById('custom-time').addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') addCustomTime();
-    });
-    
-    // Toggle todas las capas
-    document.getElementById('toggle-all-layers').addEventListener('click', toggleAllLayers);
-}
 
-// ===== Tiempos personalizados =====
-function addCustomTime() {
-    const input = document.getElementById('custom-time');
-    const minutes = parseInt(input.value);
-    
-    if (!minutes || minutes < 5 || minutes > 120) {
-        showStatus('Ingresá un tiempo entre 5 y 120 minutos', 'error');
-        return;
-    }
-    
-    // Evitar duplicados
-    if (state.selectedTimes.includes(minutes) || state.customTimes.includes(minutes)) {
-        showStatus('Ese tiempo ya está agregado', 'error');
-        return;
-    }
-    
-    state.customTimes.push(minutes);
-    state.customTimes.sort((a, b) => a - b);
-    
-    renderCustomTimes();
-    input.value = '';
-    showStatus(`✅ ${minutes} minutos agregado`, 'success');
-}
-
-function removeCustomTime(minutes) {
-    state.customTimes = state.customTimes.filter(t => t !== minutes);
-    renderCustomTimes();
-}
-
-function renderCustomTimes() {
-    const container = document.getElementById('custom-times-list');
-    container.innerHTML = '';
-    
-    state.customTimes.forEach(minutes => {
-        const chip = document.createElement('div');
-        chip.className = 'custom-time-chip';
-        chip.innerHTML = `
-            ${minutes} min
-            <span class="remove" onclick="removeCustomTime(${minutes})">×</span>
-        `;
-        container.appendChild(chip);
-    });
-}
-
-// Hacer disponible globalmente
-window.removeCustomTime = removeCustomTime;
-
-// ===== Funciones de modo de visualización =====
-function toggleViewMode() {
-    const primaryGroup = document.getElementById('primary-mode-group');
-    const secondaryGroup = document.getElementById('secondary-mode-group');
-    
-    if (state.viewMode === 'single') {
-        primaryGroup.querySelector('label').textContent = '🚗 Medio de transporte';
-        secondaryGroup.style.display = 'none';
-    } else {
-        primaryGroup.querySelector('label').textContent = '🚗 Medio principal';
-        secondaryGroup.style.display = 'block';
-        updateSecondaryModeButtons();
-    }
-}
-
-function updateSecondaryModeButtons() {
-    document.querySelectorAll('#transport-modes-secondary .transport-btn').forEach(btn => {
-        btn.classList.remove('active');
-        if (btn.dataset.mode === state.secondaryMode) {
-            btn.classList.add('active');
-        }
-    });
+    // Toggle todas las capas (button may be removed in minimal UI)
+    const toggleAllBtn = document.getElementById('toggle-all-layers');
+    if (toggleAllBtn) toggleAllBtn.addEventListener('click', toggleAllLayers);
 }
 
 // ===== Panel de capas =====
 function updateLayersPanel() {
+    // Layers panel hidden in minimal UI — keep function no-op and avoid DOM errors
     const panel = document.getElementById('layers-panel');
-    const list = document.getElementById('layers-list');
-    
-    if (state.isochroneLayers.length === 0) {
-        panel.style.display = 'none';
-        return;
-    }
-    
-    panel.style.display = 'flex';
-    list.innerHTML = '';
+    if (!panel) return;
+    panel.style.display = 'none';
+    return;
     
     // Separar capas principales de comparación
     const primaryLayers = state.isochroneLayers.filter(l => !l.isOutline);
@@ -521,44 +376,20 @@ window.toggleLayerVisibility = toggleLayerVisibility;
 
 // ===== Funciones de DEBUG =====
 function toggleDebugVisibility() {
-    const showCircles = document.getElementById('debug-mode').checked;
-    const showHullOnly = document.getElementById('show-hull-only').checked;
-    
-    console.log('Toggle debug:', { showCircles, showHullOnly });
-    
-    // Primero limpiar todo
+    // Toggle internal debug visibility flag and redraw debug layers accordingly
+    state.debugVisible = !state.debugVisible;
+    const dbgBtn = document.getElementById('toggle-debug-btn');
+    if (dbgBtn) dbgBtn.textContent = state.debugVisible ? '🧪 Ocultar círculos (debug)' : '🧪 Mostrar círculos (debug)';
+
+    // Clear previous debug layers
     hideDebugInfo();
-    
-    state.isochroneLayers.forEach(item => {
-        if (!item.visible) return;
-        
-        if (showHullOnly) {
-            // Modo normal: mostrar solo la envolvente
-            state.map.addLayer(item.layer);
-        } else {
-            // Mostrar envolvente + círculos
-            state.map.addLayer(item.layer);
-            if (item.debugInfo) {
-                drawDebugCircles(item.debugInfo, item.mode);
-                if (item.debugInfo.max_walk_distance) {
-                    drawInitialWalkCircle(item.debugInfo);
-                }
-            }
-        }
-    });
-    
-    // Si modo debug activado, ocultar envolvente y mostrar solo círculos
-    if (showCircles) {
+
+    if (state.debugVisible) {
+        // Draw debug circles for each isochrone that has debugInfo
         state.isochroneLayers.forEach(item => {
-            if (item.visible) state.map.removeLayer(item.layer);
-        });
-        state.isochroneLayers.forEach(item => {
-            if (item.visible && item.debugInfo) {
-                drawDebugCircles(item.debugInfo, item.mode);
-                if (item.debugInfo.max_walk_distance) {
-                    drawInitialWalkCircle(item.debugInfo);
-                }
-            }
+            if (!item.debugInfo) return;
+            drawDebugCircles(item.debugInfo);
+            if (item.debugInfo.max_walk_distance) drawInitialWalkCircle(item.debugInfo);
         });
     }
 }
@@ -636,6 +467,13 @@ function lockInterface() {
     
     // Ocultar mensaje de bloqueo si estaba visible
     document.getElementById('block-message').style.display = 'none';
+    // Mostrar botón de debug
+    const dbg = document.getElementById('toggle-debug-btn');
+    if (dbg) {
+        dbg.style.display = 'inline-block';
+        dbg.textContent = '🧪 Mostrar círculos (debug)';
+        state.debugVisible = false;
+    }
 }
 
 function unlockInterface() {
@@ -652,6 +490,9 @@ function unlockInterface() {
     
     // Ocultar mensaje de bloqueo
     document.getElementById('block-message').style.display = 'none';
+    // Ocultar botón de debug
+    const dbg = document.getElementById('toggle-debug-btn');
+    if (dbg) dbg.style.display = 'none';
 }
 
 function resetCalculation() {
@@ -683,7 +524,7 @@ function resetCalculation() {
     unlockInterface();
     updateGenerateButton();
     
-    // Recentrar mapa en CABA
+    // Recentrar mapa en centro por defecto
     state.map.setView(CONFIG.cabaCenter, CONFIG.defaultZoom);
     
     showStatus('🔄 Listo para un nuevo cálculo', 'success');
@@ -856,63 +697,36 @@ function placeWorkMarker(lat, lng) {
 // ===== Generación de isócronas =====
 async function generateIsochrones() {
     if (!state.selectedLocation) return;
-    
-    // Combinar tiempos preset y custom
-    const allTimes = [...state.selectedTimes, ...state.customTimes];
-    
-    if (allTimes.length === 0) {
-        showStatus('Selecciona al menos un tiempo', 'error');
+    if (state.hasResults) {
+        showStatus('Hay un cálculo activo. Presioná "Nuevo cálculo" para iniciar otro.', 'error');
         return;
     }
-    
-    // Determinar qué modos calcular según el modo de visualización
-    const modesToCalculate = [];
-    modesToCalculate.push({ mode: state.primaryMode, isOutline: false, label: 'Principal' });
-    
-    if (state.viewMode === 'compare') {
-        modesToCalculate.push({ mode: state.secondaryMode, isOutline: true, label: 'Comparación' });
-    }
-    
-    const totalCount = modesToCalculate.length * allTimes.length;
-    const modeText = state.viewMode === 'single' ? state.primaryMode : `${state.primaryMode} vs ${state.secondaryMode}`;
-    showLoading(true, `Calculando ${totalCount} isócronas para ${modeText}...`);
-    
+    // Solo un tiempo seleccionado (slider)
+    const minutes = state.selectedTime || 30;
+    showLoading(true, `Calculando isócrona de ${minutes} min para ${state.primaryMode}...`);
+
     try {
         // Limpiar isócronas anteriores
         clearIsochrones();
-        
-        // Generar isócronas
-        const promises = [];
-        for (const { mode, isOutline } of modesToCalculate) {
-            for (const minutes of allTimes) {
-                promises.push(fetchIsochrone(mode, minutes, isOutline));
-            }
-        }
-        
-        await Promise.all(promises);
-        
+
+        // Generar una sola isócrona
+        await fetchIsochrone(state.primaryMode, minutes, false);
+
         // Actualizar panel de capas
         updateLayersPanel();
-        
+
         // Marcar que hay resultados y bloquear interfaz
         state.hasResults = true;
-        state.activeRouteMode = state.primaryMode;  // Guardar modo para rutas
+        state.activeRouteMode = state.primaryMode;
         lockInterface();
-        
-        // Aplicar configuración de visualización
-        toggleDebugVisibility();
-        
-        const successMsg = state.viewMode === 'single' 
-            ? `✅ Mapa de ${CONFIG.modeColorSchemes[state.primaryMode].label} generado`
-            : `✅ Comparación: ${CONFIG.modeColorSchemes[state.primaryMode].label} vs ${CONFIG.modeColorSchemes[state.secondaryMode].label}`;
-        showStatus(successMsg + '. Hacé clic en el mapa para ver rutas.', 'success');
-        
-        // Si hay transporte público en los modos seleccionados
-        const hasPublicTransport = modesToCalculate.some(m => m.mode === 'public_transport');
-        if (hasPublicTransport && state.showTransport) {
+
+        showStatus(`✅ Mapa de ${CONFIG.modeColorSchemes[state.primaryMode].label} generado. Presioná "Nuevo cálculo" para cambiar ubicación.`, 'success');
+
+        // Si el modo es transporte público o Subte, resaltar estaciones en área
+        if (state.primaryMode === 'public_transport' || state.primaryMode === 'subte') {
             highlightStationsInArea();
         }
-        
+
     } catch (error) {
         showStatus('Error al generar isócronas', 'error');
         console.error(error);
@@ -965,6 +779,10 @@ async function fetchIsochrone(mode, minutes, isOutline = false) {
         
         // Dibujar isócrona (relleno o solo contorno)
         drawIsochrone(data.isochrone, mode, minutes, isOutline, debugInfo);
+        // Si tenemos debugInfo y es transporte, resaltar paradas/recorridos usados
+        if (debugInfo && (mode === 'public_transport' || mode === 'subte')) {
+            highlightUsedTransit(debugInfo, mode);
+        }
         
         // Si es modo demo, mostrar badge
         if (data.demo) {
@@ -980,9 +798,9 @@ async function fetchIsochrone(mode, minutes, isOutline = false) {
 function drawIsochrone(geojson, mode, minutes, isOutline = false, debugInfo = null) {
     if (!geojson || !geojson.geometry) return;
     
-    // Para transporte público con debugInfo, dibujar círculos individuales
-    if (mode === 'public_transport' && debugInfo && debugInfo.routes_used && !isOutline) {
-        drawTransitCircles(debugInfo, minutes);
+    // Para transporte público o Subte con debugInfo, dibujar círculos individuales
+    if ((mode === 'public_transport' || mode === 'subte') && debugInfo && debugInfo.routes_used && !isOutline) {
+        drawTransitCircles(debugInfo, minutes, mode);
         return;
     }
     
@@ -1050,7 +868,9 @@ function drawIsochrone(geojson, mode, minutes, isOutline = false, debugInfo = nu
 }
 
 // Dibujar círculos individuales de transporte público
-function drawTransitCircles(debugInfo, minutes) {
+function drawTransitCircles(debugInfo, minutes, mode = 'public_transport') {
+    // Colors based on mode + minutes
+    const colors = getColorForModeAndTime(mode, minutes);
     const colorsByRoute = {
         'Subte Línea A': '#00a0e3',
         'Subte Línea B': '#ee3d3d', 
@@ -1063,61 +883,181 @@ function drawTransitCircles(debugInfo, minutes) {
         'Tren Sarmiento': '#00a651',
         'Tren San Martín': '#ee3d3d'
     };
-    
-    const layerGroup = L.layerGroup();
-    
-    // Círculo inicial desde el trabajo (zona caminable a paradas)
+
+    // Build Turf polygons (one polygon per stop buffer)
+    const circlePolys = [];
+    const MAX_STOP_BUFFER_M = 2000; // clamp max per-stop walk radius to 2km to avoid runaway unions
+    debugInfo.routes_used.forEach(route => {
+        route.stops_reached.forEach(stop => {
+            if (!stop || !stop.lon || !stop.lat || !stop.walk_radius_meters) return;
+            try {
+                // clamp radius to avoid overly large buffers
+                const radiusMeters = Math.min(stop.walk_radius_meters || 0, MAX_STOP_BUFFER_M);
+                if (radiusMeters <= 0) return;
+                // turf.circle center: [lon, lat], radius in kilometers
+                const radiusKm = radiusMeters / 1000.0;
+                const poly = turf.circle([stop.lon, stop.lat], radiusKm, {steps: 32, units: 'kilometers'});
+                circlePolys.push(poly);
+            } catch (e) {
+                console.warn('Error creando círculo Turf para parada', stop, e);
+            }
+        });
+    });
+
+    // Include initial walk circle (from origin) to anchor the union and ensure origin inclusion
     if (debugInfo.max_walk_distance && state.selectedLocation) {
+        try {
+            const initialRadiusKm = Math.min(debugInfo.max_walk_distance, MAX_STOP_BUFFER_M) / 1000.0;
+            const initialPoly = turf.circle([state.selectedLocation.lng, state.selectedLocation.lat], initialRadiusKm, {steps: 32, units: 'kilometers'});
+            circlePolys.push(initialPoly);
+        } catch (e) {
+            console.warn('Error creando círculo inicial Turf:', e);
+        }
+    }
+
+    // If no circle polygons, fallback to drawing the initial walk circle(s)
+    const layerGroup = L.layerGroup();
+    if ((!circlePolys || circlePolys.length === 0) && debugInfo.max_walk_distance && state.selectedLocation) {
         const initialCircle = L.circle([state.selectedLocation.lat, state.selectedLocation.lng], {
             radius: debugInfo.max_walk_distance,
             color: 'transparent',
             weight: 0,
-            fillColor: '#90EE90',
-            fillOpacity: 0.15
+            fillColor: colors.fill,
+            fillOpacity: Math.min(0.35, colors.fillOpacity || 0.25)
         }).bindTooltip('Zona caminable desde tu trabajo');
-        
         layerGroup.addLayer(initialCircle);
+        layerGroup.addTo(state.map);
+        state.isochroneLayers.push({ layer: layerGroup, mode: mode, minutes: minutes, visible: true, isOutline: false, color: colors.solid || '#6f2390', debugInfo: debugInfo });
+        if (state.isochroneLayers.length === 1) state.map.fitBounds(layerGroup.getBounds(), { padding: [50, 50] });
+        return;
     }
-    
-    // Círculos desde cada parada
-    debugInfo.routes_used.forEach(route => {
-        const routeColor = colorsByRoute[route.name] || '#666666';
-        
-        route.stops_reached.forEach(stop => {
-            const circle = L.circle([stop.lat, stop.lon], {
-                radius: stop.walk_radius_meters,
-                color: 'transparent',
-                weight: 0,
-                fillColor: routeColor,
-                fillOpacity: 0.15
-            }).bindTooltip(
-                `<strong>${route.name}</strong><br>` +
-                `<strong>${stop.name}</strong><br>` +
-                `Tiempo restante: ${stop.time_remaining} min<br>` +
-                `Radio: ${Math.round(stop.walk_radius_meters)}m`
-            );
-            
-            layerGroup.addLayer(circle);
+
+    console.log('[DEBUG] circlePolys count:', circlePolys.length);
+    // Merge polygons using Turf.js (cascaded union)
+    let merged = null;
+    try {
+        merged = circlePolys[0];
+        for (let i = 1; i < circlePolys.length; i++) {
+            try {
+                merged = turf.union(merged, circlePolys[i]);
+            } catch (e) {
+                // union can fail for some geometry edge cases; skip polygon on error
+                console.warn('turf.union failed on polygon index', i, e);
+            }
+        }
+    } catch (e) {
+        console.error('Error durante unión de círculos:', e);
+    }
+
+    if (!merged) {
+        // fallback: draw individual circles as before
+        circlePolys.forEach(p => {
+            const coords = p.geometry.coordinates[0];
+            const latlng = [coords[0][1], coords[0][0]];
+            const marker = L.circle(latlng, { radius: 10, color: colors.fill }).addTo(layerGroup);
         });
-    });
-    
-    layerGroup.addTo(state.map);
-    
-    // Guardar referencia
-    state.isochroneLayers.push({
-        layer: layerGroup,
-        mode: 'public_transport',
-        minutes: minutes,
-        visible: true,
-        isOutline: false,
-        color: '#6f2390',
-        debugInfo: debugInfo
-    });
-    
-    // Ajustar vista
-    if (state.isochroneLayers.length === 1) {
-        state.map.fitBounds(layerGroup.getBounds(), { padding: [50, 50] });
+        layerGroup.addTo(state.map);
+        state.isochroneLayers.push({ layer: layerGroup, mode: mode, minutes: minutes, visible: true, isOutline: false, color: colors.solid || '#6f2390', debugInfo: debugInfo });
+        return;
     }
+
+    // Flatten multipolygons to individual polygons
+    let flattened = turf.flatten(merged);
+    let candidates = [];
+    if (flattened && flattened.features && flattened.features.length > 0) candidates = flattened.features;
+    else candidates = [merged];
+
+    // Choose the polygon that contains the origin point (if any)
+    const originPt = turf.point([state.selectedLocation.lng, state.selectedLocation.lat]);
+    let chosen = candidates.find(p => turf.booleanPointInPolygon(originPt, p));
+
+    // If none contains origin, try buffering candidates outward incrementally
+    if (!chosen) {
+        const maxExpand = 200; // meters
+        let expand = 25;
+        while (expand <= maxExpand && !chosen) {
+            for (let p of candidates) {
+                const buff = turf.buffer(p, expand / 1000.0, { units: 'kilometers' });
+                if (turf.booleanPointInPolygon(originPt, buff)) { chosen = buff; break; }
+            }
+            expand += 25;
+        }
+    }
+
+    // If still none, pick the largest polygon (area)
+    if (!chosen) {
+        let largest = candidates[0];
+        for (let i = 1; i < candidates.length; i++) {
+            if (turf.area(candidates[i]) > turf.area(largest)) largest = candidates[i];
+        }
+        chosen = largest;
+    }
+
+    // Smooth edges: small positive buffer then negative buffer
+    const smoothMeters = 15; // configurable; could expose UI control
+    let smooth = turf.buffer(chosen, smoothMeters / 1000.0, { units: 'kilometers' });
+    smooth = turf.buffer(smooth, -smoothMeters / 1000.0, { units: 'kilometers' });
+
+    // If MultiPolygon after smoothing, select the piece with origin or the largest
+    if (smooth.geometry && smooth.geometry.type === 'MultiPolygon') {
+        const flat2 = turf.flatten(smooth);
+        let selected = flat2.features.find(f => turf.booleanPointInPolygon(originPt, f));
+        if (!selected) selected = flat2.features.reduce((a, b) => (turf.area(b) > turf.area(a) ? b : a));
+        smooth = selected;
+    }
+
+    // Draw final unified polygon with double/styled outline and solid background
+    const strokeColor = colors.stroke || colors.solid || '#6f2390';
+    const fillColor = colors.fill || colors.solid || '#6f2390';
+
+    // Base soft outline (underlay) to give a halo/double-border effect
+    const baseLayer = L.geoJSON(smooth, {
+        style: {
+            color: strokeColor,
+            weight: 10,
+            opacity: 0.18,
+            fillColor: fillColor,
+            fillOpacity: Math.min(0.28, (colors.fillOpacity || 0.25) * 0.9)
+        }
+    });
+
+    // Top dashed outline for clear edge
+    const topLayer = L.geoJSON(smooth, {
+        style: {
+            color: strokeColor,
+            weight: 3,
+            opacity: 0.95,
+            dashArray: '8,6',
+            fillOpacity: 0 // keep fill only on baseLayer
+        }
+    });
+
+    // Solid fill layer (slightly translucent) placed between base and top
+    const fillLayer = L.geoJSON(smooth, {
+        style: {
+            color: 'transparent',
+            weight: 0,
+            fillColor: fillColor,
+            fillOpacity: Math.min(0.42, colors.fillOpacity || 0.32)
+        }
+    });
+
+    const group = L.layerGroup([baseLayer.addTo(state.map), fillLayer.addTo(state.map), topLayer.addTo(state.map)]);
+
+    // Optionally draw debug circles if debug mode enabled
+    // Optionally draw debug circles if debug toggle is active
+    if (state.debugVisible) {
+        circlePolys.forEach(p => {
+            try {
+                const coords = p.geometry.coordinates[0][0];
+                const marker = L.circle([coords[1], coords[0]], { radius: 4, color: '#000', fillOpacity: 0.2 }).addTo(state.map);
+                state.debugLayers.push(marker);
+            } catch (e) {}
+        });
+    }
+
+    state.isochroneLayers.push({ layer: group, mode: mode, minutes: minutes, visible: true, isOutline: false, color: strokeColor, debugInfo: debugInfo });
+    if (state.isochroneLayers.length === 1) state.map.fitBounds(group.getBounds(), { padding: [50, 50] });
 }
 
 function clearIsochrones() {
@@ -1128,6 +1068,166 @@ function clearIsochrones() {
     
     // Limpiar también capas de debug
     hideDebugInfo();
+}
+
+function clearUsedTransitHighlight() {
+    if (state.usedTransitLayers) {
+        try { state.map.removeLayer(state.usedTransitLayers.stops); } catch (e) {}
+        try { state.map.removeLayer(state.usedTransitLayers.recorridos); } catch (e) {}
+        state.usedTransitLayers = null;
+    }
+    // Restablecer capas base si estaban visibles
+    if (state.servicesLayers) {
+        const sc = document.getElementById('show-colectivos');
+        if (state.servicesLayers.colectivos && sc && sc.checked) {
+            state.servicesLayers.colectivos.addTo(state.map);
+        }
+        const scr = document.getElementById('show-colectivos-recorridos');
+        if (state.servicesLayers.colectivosRecorridos && scr && scr.checked) {
+            state.servicesLayers.colectivosRecorridos.addTo(state.map);
+        }
+    }
+}
+
+// Distancia en metros entre dos pares lat/lon
+function distanceMeters(lat1, lon1, lat2, lon2) {
+    const R = 6371000;
+    const toRad = Math.PI / 180;
+    const dLat = (lat2 - lat1) * toRad;
+    const dLon = (lon2 - lon1) * toRad;
+    const a = Math.sin(dLat/2) * Math.sin(dLat/2) + Math.cos(lat1*toRad) * Math.cos(lat2*toRad) * Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
+}
+
+async function highlightUsedTransit(debugInfo, mode = 'public_transport') {
+    try {
+        // Limpiar previo resaltado
+        clearUsedTransitHighlight();
+
+        const neon = '#00ff00';
+        const stopRadius = 8;
+
+        // Recolectar paradas usadas únicas
+        const usedStops = {};
+        debugInfo.routes_used.forEach(route => {
+            (route.stops_reached || []).forEach(s => {
+                if (!s || !s.lat || !s.lon) return;
+                const key = s.stop_id || s.name || `${s.lat}_${s.lon}`;
+                usedStops[key] = s;
+            });
+        });
+
+        // Crear capa de paradas usadas
+        const stopsLayer = L.layerGroup();
+        Object.values(usedStops).forEach(s => {
+            const m = L.circleMarker([s.lat, s.lon], {
+                radius: stopRadius,
+                fillColor: neon,
+                color: '#ffffff',
+                weight: 2,
+                fillOpacity: 1
+            }).bindPopup(`<strong>${s.name || s.stop_id || 'Parada'}</strong><br>Tiempo restante: ${s.time_remaining || s.time_remaining_min || '-'} min`);
+            stopsLayer.addLayer(m);
+        });
+
+        // Crear capa de recorridos usados (detectar por proximidad a paradas)
+        const recorridosLayer = L.layerGroup();
+
+        // Volver a pedir los recorridos y buscar coincidencias por distancia
+        const resp = await fetch('/api/colectivos-recorridos');
+        if (resp.ok) {
+            const data = await resp.json();
+            const tolerancia = 50; // metros
+
+            (data.recorridos || []).forEach(rec => {
+                const pts = rec.polyline || [];
+                let matches = false;
+                for (let i = 0; i < pts.length && !matches; i++) {
+                    const p = pts[i];
+                    const lat = p[0];
+                    const lon = p[1];
+                    for (const key in usedStops) {
+                        const s = usedStops[key];
+                        const d = distanceMeters(lat, lon, s.lat, s.lon);
+                        if (d <= tolerancia) { matches = true; break; }
+                    }
+                }
+
+                if (matches) {
+                    const line = L.polyline(rec.polyline.map(pt => [pt[0], pt[1]]), {
+                        color: neon,
+                        weight: 4,
+                        opacity: 0.95
+                    }).bindPopup(`<strong>🚌 Línea ${rec.linea}</strong><br>${rec.descripcion || ''}`);
+                    recorridosLayer.addLayer(line);
+                }
+            });
+        }
+
+        // Ocultar capas base de colectivos si existen
+        if (state.servicesLayers && state.servicesLayers.colectivos) {
+            try { state.map.removeLayer(state.servicesLayers.colectivos); } catch(e){}
+        }
+        if (state.servicesLayers && state.servicesLayers.colectivosRecorridos) {
+            try { state.map.removeLayer(state.servicesLayers.colectivosRecorridos); } catch(e){}
+        }
+
+        // Ocultar capas base de subte/tren si existen
+        if (state.transportLayers && state.transportLayers.subte) {
+            try { state.map.removeLayer(state.transportLayers.subte); } catch(e){}
+        }
+        if (state.transportLayers && state.transportLayers.tren) {
+            try { state.map.removeLayer(state.transportLayers.tren); } catch(e){}
+        }
+
+        // Añadir capas resaltadas por tipo
+        stopsLayer.addTo(state.map);
+        recorridosLayer.addTo(state.map);
+
+        // Además, resaltar sólo las líneas de subte/tren usadas (si aplica)
+        const usedRouteNames = (debugInfo.routes_used || []).map(r => (r.name || (r.route_id ? `${r.route_id}` : ''))).filter(Boolean);
+        try {
+            const tlResp = await fetch('/api/transport-lines');
+            if (tlResp.ok) {
+                const tl = await tlResp.json();
+                const transitLayer = L.layerGroup();
+
+                // Subte
+                (tl.subte || []).forEach(line => {
+                    const displayName1 = `Subte Línea ${line.line}`;
+                    const displayName2 = `${line.line}`;
+                    const matches = usedRouteNames.some(rn => rn.includes(displayName1) || rn.includes(displayName2) || displayName1.includes(rn));
+                    if (matches) {
+                        const lineCoords = line.stations.map(s => [s.lat, s.lon]);
+                        L.polyline(lineCoords, { color: neon, weight: 4, opacity: 0.95 }).addTo(transitLayer);
+                    }
+                });
+
+                // Tren
+                (tl.tren || []).forEach(line => {
+                    const displayName = line.line || line.name || '';
+                    const matches = usedRouteNames.some(rn => rn.includes(displayName) || displayName.includes(rn));
+                    if (matches) {
+                        const lineCoords = line.stations.map(s => [s.lat, s.lon]);
+                        L.polyline(lineCoords, { color: neon, weight: 4, opacity: 0.95, dashArray: '6,4' }).addTo(transitLayer);
+                    }
+                });
+
+                transitLayer.addTo(state.map);
+                // store additionally in usedTransitLayers
+                state.usedTransitLayers = { stops: stopsLayer, recorridos: recorridosLayer, transit: transitLayer };
+            } else {
+                state.usedTransitLayers = { stops: stopsLayer, recorridos: recorridosLayer };
+            }
+        } catch (e) {
+            console.warn('No se pudieron cargar transport-lines para resaltar subte/tren:', e);
+            state.usedTransitLayers = { stops: stopsLayer, recorridos: recorridosLayer };
+        }
+
+    } catch (e) {
+        console.error('Error resaltando transporte usado:', e);
+    }
 }
 
 // ===== Capa de transporte público =====
@@ -1190,10 +1290,10 @@ async function loadTransportLines() {
             tren: trenGroup
         };
         
-        // Mostrar por defecto
-        if (state.showTransport) {
+        // Añadir subte si el checkbox está marcado
+        const subteCheckbox = document.getElementById('show-subte');
+        if (subteCheckbox && subteCheckbox.checked) {
             subteGroup.addTo(state.map);
-            trenGroup.addTo(state.map);
         }
         
     } catch (error) {
@@ -1201,15 +1301,7 @@ async function loadTransportLines() {
     }
 }
 
-function toggleTransportLayer() {
-    Object.values(state.transportLayers).forEach(layer => {
-        if (state.showTransport) {
-            layer.addTo(state.map);
-        } else {
-            state.map.removeLayer(layer);
-        }
-    });
-}
+// (toggleTransportLayer removed - subte is controlled via its checkbox)
 
 function highlightStationsInArea() {
     // TODO: Implementar detección de estaciones dentro de la isócrona
@@ -1290,11 +1382,10 @@ async function loadServicesLayers() {
         
         data.barrios.forEach(b => {
             const polygon = L.polygon(b.polygon, {
-                color: '#ea580c',  // Naranja precaución
+                color: '#b91c1c',
                 weight: 2,
-                fillColor: '#ea580c',
-                fillOpacity: 0.15,
-                dashArray: '5, 5'
+                fillColor: '#fca5a5',
+                fillOpacity: 0.35
             }).bindPopup(
                 `<strong>⚠️ ${b.name}</strong><br>` +
                 `<em>${b.type}</em><br>` +
@@ -1334,33 +1425,70 @@ async function loadServicesLayers() {
         const response = await fetch('/api/colectivos-recorridos');
         const data = await response.json();
         
-        // Colores para diferentes líneas
-        const colors = ['#16a34a', '#0891b2', '#7c3aed', '#db2777', '#ea580c', '#2563eb'];
-        
+        // Dibujar recorridos con color único por línea y marcadores por parada (si vienen en la API)
         data.recorridos.forEach((rec, idx) => {
-            const color = colors[idx % colors.length];
-            
+            const color = generateLineColor(idx);
+            const lineKey = rec.linea || `line_${idx}`;
+
+            const lineGroup = L.layerGroup();
+
             const polyline = L.polyline(rec.polyline, {
                 color: color,
                 weight: 3,
-                opacity: 0.7
+                opacity: 0.9
             }).bindPopup(
                 `<strong>🚌 Línea ${rec.linea}</strong><br>` +
                 `<small>${rec.descripcion}</small>`
             );
-            
-            // Tooltip en hover
-            polyline.bindTooltip(
-                `Línea ${rec.linea}`,
-                {
-                    sticky: true,
-                    direction: 'top',
-                    className: 'route-tooltip',
-                    opacity: 1
-                }
-            );
-            
-            state.servicesLayers.colectivosRecorridos.addLayer(polyline);
+
+            polyline.bindTooltip(`Línea ${rec.linea}`, { sticky: true, direction: 'top', className: 'route-tooltip', opacity: 1 });
+
+            // Mantener estilos originales para revertir
+            const origStyle = { color: color, weight: 3, opacity: 0.9 };
+
+            // Array para guardar marcadores de esta línea
+            const markers = [];
+
+            // Si la API incluye paradas/estaciones para la línea, usarlas
+            const stops = rec.stops || rec.stations || rec.paradas || [];
+            if (stops && stops.length > 0) {
+                stops.forEach(s => {
+                    const lat = s.lat || s.latitude || s[0];
+                    const lon = s.lon || s.longitude || s[1];
+                    if (lat == null || lon == null) return;
+                    const marker = L.circleMarker([lat, lon], {
+                        radius: 5,
+                        fillColor: color,
+                        color: '#ffffff',
+                        weight: 2,
+                        fillOpacity: 1
+                    }).bindPopup(`<strong>🚌 ${rec.linea} - ${s.name || s.nombre || ''}</strong>`);
+
+                    // Hover en parada resalta la línea
+                    marker.on('mouseover', () => highlightColectivoLine(lineKey, true));
+                    marker.on('mouseout', () => highlightColectivoLine(lineKey, false));
+
+                    markers.push(marker);
+                    lineGroup.addLayer(marker);
+                });
+            }
+
+            // Hover en polyline resalta la línea y sus paradas
+            polyline.on('mouseover', function() { highlightColectivoLine(lineKey, true); this.bringToFront(); });
+            polyline.on('mouseout', function() { highlightColectivoLine(lineKey, false); });
+
+            lineGroup.addLayer(polyline);
+
+            // Guardar referencia en el estado
+            state.colectivoLines[lineKey] = {
+                polyline: polyline,
+                markers: markers,
+                group: lineGroup,
+                origStyle: origStyle
+            };
+
+            // Añadir al grupo general de recorridos
+            state.servicesLayers.colectivosRecorridos.addLayer(lineGroup);
         });
         
         console.log(`[SERVICES] Cargados ${data.count} recorridos de colectivo`);
@@ -1380,10 +1508,31 @@ function toggleServicesLayer(type, show) {
     }
 }
 
+function highlightColectivoLine(lineKey, on) {
+    const info = state.colectivoLines[lineKey];
+    if (!info) return;
+
+    if (on) {
+        try {
+            info.polyline.setStyle({ weight: 6, opacity: 1 });
+        } catch (e) {}
+        info.markers.forEach(m => {
+            try { m.setStyle({ radius: 8, weight: 3 }); } catch (e) {}
+        });
+    } else {
+        try {
+            info.polyline.setStyle({ weight: info.origStyle.weight, opacity: info.origStyle.opacity });
+        } catch (e) {}
+        info.markers.forEach(m => {
+            try { m.setStyle({ radius: 5, weight: 2 }); } catch (e) {}
+        });
+    }
+}
+
 // ===== Utilidades =====
 function updateGenerateButton() {
     const btn = document.getElementById('generate-btn');
-    btn.disabled = !state.selectedLocation;
+    btn.disabled = !state.selectedLocation || state.hasResults;
 }
 
 function showLoading(show, message = '') {
